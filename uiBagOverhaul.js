@@ -1,26 +1,23 @@
-// js/uiBagOverhaul.js (v7)
-// ⭐ 「🛡️ 裝備行囊 & 工藝」→ 彈窗化（大修構造）
+// js/uiBagOverhaul.js (v8)
+// ⭐ 「🛡️ 裝備行囊 & 工藝」→ 彈窗化（雙頁面：行囊 / 通貨倉庫）
 //
-// 【v7 修正】
-//   ① ★ 重新整理後工藝台／道具欄消失
-//      根因：renderModal() 用 innerHTML 重建 → 舊 host 被銷毀 → 裡面的
-//            #poe-craft-bench / #inventory-list 變成 detached
-//            → moveOriginalsIn() 用 getElementById 找不到 → 搬不進去
-//      修法：原版節點快取成模組層變數（_orig.craft / bagList / bagFilter）
-//            每次重繪後直接 appendChild 該參考；節點若被外部重建則自動更新快取
-//   ② ★ 裝備對比（滑鼠移到背包裝備）
-//      額外顯示「當前角色對應裝備」三欄對照表：
-//        屬性 ｜ 🆕 背包中 ｜ ✅ 已裝備 ｜ 差異（▲綠／▼紅／─灰）
-//      戒指自動對比較弱的那一只；無對手時顯示「該部位尚未裝備」
-//   ③ 保留 v6：門派中文顯示、裝備欄不重疊、工藝台／道具欄搬移、Rich Tooltip
+// 【v8 改動】
+//   ① 移除所有原生 title 屬性 → 不再出現白色方框提示
+//   ② 「工藝台」→「🗃️ 通貨倉庫」按鈕；點擊把彈窗切換到 PoE 通貨倉庫頁面
+//      · 關閉/返回 → 回到行囊頁面（不關彈窗）
+//      · 通貨格 100% 仿 POE：格子式、顯示數量、hover 顯示說明、點擊直接作用於目標裝備
+//      · 左側十部位可點選作為「改造目標」，並即時預覽詞綴
+//   ③ 移除彈窗底部的「💎 工藝打造台」收納區
+//   ④ 裝備對比改為「兩個裝備詳細視窗」
+//      · 右：滑鼠目標裝備｜左：當前角色同部位已裝備｜中間：戰力差異徽章
+//   ⑤ 原版節點寄放於隱藏 #bagov-hold → 切頁/重整都不會消失（根治 v6 問題）
 //
 // Console：
 //   HY.BagOverhaul.open() / close() / toggle()
-//   HY.BagOverhaul.status() / diag() / probe()
+//   HY.BagOverhaul.stash(true|false)   // 切換到通貨倉庫 / 回行囊
+//   HY.BagOverhaul.status() / diag() / orig() / probe()
 //   HY.BagOverhaul.chars() / switchTo('角色名或id') / sectTable()
-//   HY.BagOverhaul.bestGear() / batchPurge('lowRarity')
-//   HY.BagOverhaul.orig()      // 檢查原版節點是否還在（修復驗證用）
-//   HY.BagOverhaul.compare(id) // 手動比較某件裝備（uid）
+//   HY.BagOverhaul.bestGear() / batchPurge('lowRarity') / compare(uid)
 //
 // ⚠️ 載入順序：uiEquipMarket.js 之後、main.js 之前
 window.HY = window.HY || {};
@@ -39,13 +36,14 @@ window.HY = window.HY || {};
     BAG_FILTER_SEL: '.inv-filter-bar',
     BAG_LIST_ID: 'inventory-list',
 
-    COMPARE: true,          // ★ 裝備對比
+    COMPARE: true,          // 雙視窗對比
     GRID_COLS: 6,
-    TOOLTIP_DELAY: 80,
+    ORB_COLS: 10,           // 通貨倉庫每列格數
+    TOOLTIP_DELAY: 70,
     VERBOSE: true,
 
-    PREF_KEY: 'hy_bagov_pref_v7',
-    LOCK_KEY: 'hy_bagov_lock_v7'
+    PREF_KEY: 'hy_bagov_pref_v8',
+    LOCK_KEY: 'hy_bagov_lock_v8'
   };
 
   /* ══════════════════════════════════════════════════════
@@ -310,9 +308,9 @@ window.HY = window.HY || {};
       for (var j = 0; j < fnNames.length; j++) {
         if (typeof t[fnNames[j]] !== 'function') continue;
         try { t[fnNames[j]](id); } catch (e) {}
-        if (isActive(m)) { log('切換成功（' + fnNames[j] + '）'); return true; }
+        if (isActive(m)) return true;
         try { t[fnNames[j]](m); } catch (e2) {}
-        if (isActive(m)) { log('切換成功（' + fnNames[j] + ' 傳物件）'); return true; }
+        if (isActive(m)) return true;
       }
     }
     try {
@@ -329,8 +327,7 @@ window.HY = window.HY || {};
         }
       }
     } catch (e) {}
-    if (isActive(m)) { log('切換成功（直接設 reference）'); return true; }
-
+    if (isActive(m)) return true;
     var sels = ['#sidebar-roster-switcher button', '#roster-party-list button',
                 '#sidebar-roster-switcher [data-char-id]', '#roster-party-list [data-char-id]'];
     var ok = false;
@@ -347,13 +344,12 @@ window.HY = window.HY || {};
         if (isActive(m)) { ok = true; break; }
       }
     }
-    if (ok) { log('切換成功（DOM 點擊）'); return true; }
-    warn('切換角色失敗：' + (m.name || id));
-    return false;
+    return ok;
   }
   function afterSwitch() {
     var a = APP();
     if (typeof a.renderAll === 'function') safe(function () { a.renderAll(); });
+    refreshOriginals();
     if (_open) renderModal();
   }
 
@@ -386,16 +382,16 @@ window.HY = window.HY || {};
      狀態
      ══════════════════════════════════════════════════════ */
   var _open = false, _els = null;
+  var _page = 'bag';                 // 'bag' | 'stash'
   var _selUid = null;
   var _checked = {};
-  var _ttEl = null, _ttTimer = null;
+  var _iwEl = { a: null, b: null, badge: null };   // 雙視窗對比
+  var _ttTimer = null;
   var _ctxEl = null, _ctxCloser = null;
   var _floatBtn = null;
   var _savedFilter = null;
   var _entryLog = { intercept: false, float: false, craftMoved: false, bagMoved: false };
-
-  /* ★ 原版節點快取（v7 核心修正） */
-  var _orig = { craft: null, bagList: null, bagFilter: null, captured: false };
+  var _orig = { craft: null, bagList: null, bagFilter: null };
 
   /* ══════════════════════════════════════════════════════
      樣式
@@ -405,7 +401,7 @@ window.HY = window.HY || {};
     var host = document.head || document.documentElement;
     if (!host) return;
     var css = `
-.bagov-mask{position:fixed;inset:0;z-index:9600;background:rgba(2,6,12,.8);
+.bagov-mask{position:fixed;inset:0;z-index:9600;background:rgba(2,6,12,.82);
  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);
  display:flex;align-items:center;justify-content:center;padding:12px;}
 .bagov-mask.hidden{display:none!important;}
@@ -417,7 +413,9 @@ window.HY = window.HY || {};
 .bagov.wide{width:98vw!important;height:96vh!important;}
 .bagov-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;
  background:linear-gradient(90deg,#132018,#16302a);border-bottom:2px solid #34d399;flex:0 0 auto;}
+.bagov-head.gold{background:linear-gradient(90deg,#241d10,#2a2415);border-bottom-color:#fbbf24;}
 .bagov-title{font-size:1.08rem;font-weight:bold;color:#6ee7b7;}
+.bagov-head.gold .bagov-title{color:#fde68a;}
 .bagov-sub{font-size:.72rem;color:#94a3b8;}
 .bagov-headbtns{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap;}
 .bagov-btn{background:#22303d;color:#6ee7b7;border:1px solid #34d399;border-radius:5px;
@@ -428,23 +426,18 @@ window.HY = window.HY || {};
 
 .bagov-body{flex:1 1 auto;display:flex;min-height:0;overflow:hidden;}
 
-.bagov-left{
-  width:296px;flex:0 0 296px;
-  border-right:1px solid #23303e;
-  overflow-y:auto;overflow-x:hidden;
-  padding:10px;background:#0d1319;
-  display:flex;flex-direction:column;gap:8px;box-sizing:border-box;
-}
+.bagov-left{width:296px;flex:0 0 296px;border-right:1px solid #23303e;
+ overflow-y:auto;overflow-x:hidden;padding:10px;background:#0d1319;
+ display:flex;flex-direction:column;gap:8px;box-sizing:border-box;}
 .bagov-eqtitle{font-size:.79rem;color:#7dd3fc;font-weight:bold;flex:0 0 auto;}
 .bagov-eq{display:grid;grid-template-columns:1fr 1fr;gap:6px;flex:0 0 auto;}
-.bagov-slot{
-  background:#121a22;border:2px solid #2e3b4e;border-radius:6px;
-  padding:5px 7px;display:flex;align-items:center;gap:7px;
-  cursor:pointer;min-height:48px;overflow:hidden;box-sizing:border-box;
-  transition:border-color .12s,transform .12s;
-}
+.bagov-slot{background:#121a22;border:2px solid #2e3b4e;border-radius:6px;
+ padding:5px 7px;display:flex;align-items:center;gap:7px;
+ cursor:pointer;min-height:48px;overflow:hidden;box-sizing:border-box;
+ transition:border-color .12s,transform .12s;}
 .bagov-slot:hover{border-color:#34d399;transform:translateY(-1px);}
 .bagov-slot.empty{border-style:dashed;opacity:.5;}
+.bagov-slot.target{border-color:#00e5ff!important;box-shadow:0 0 12px rgba(0,229,255,.75);}
 .bagov-slot .ic{font-size:1.15rem;line-height:1;flex:0 0 22px;width:22px;text-align:center;
  display:flex;align-items:center;justify-content:center;}
 .bagov-slot .tx{display:flex;flex-direction:column;justify-content:center;gap:2px;
@@ -496,6 +489,8 @@ window.HY = window.HY || {};
 .bagov-tools .tb-btn:hover{background:#2f3f50;}
 .bagov-tools .tb-btn:disabled{opacity:.35;cursor:not-allowed;}
 .bagov-tools .tb-btn.y{border-color:#fbbf24;color:#fcd34d;}
+.bagov-tools .tb-btn.gold{border-color:#fbbf24;color:#fde68a;
+ background:linear-gradient(180deg,rgba(251,191,36,.2),rgba(251,191,36,.04));font-weight:bold;}
 .bagov-tools .tb-cap{font-size:.75rem;color:#94a3b8;margin-left:auto;white-space:nowrap;}
 .bagov-tools .tb-cap b{color:#6ee7b7;}
 .bagov-tools .tb-cap.warn b{color:#fbbf24;}
@@ -525,10 +520,10 @@ window.HY = window.HY || {};
 .bagov-cell .cc{position:absolute;right:2px;bottom:1px;font-size:.51rem;color:#67e8f9;}
 .bagov-cell .cx{position:absolute;left:1px;bottom:1px;font-size:.5rem;color:#dc2626;font-weight:bold;}
 .bagov-cell .ce{position:absolute;left:2px;top:1px;font-size:.58rem;color:#34d399;font-weight:bold;}
-.bagov-cell .cg{position:absolute;right:2px;top:14px;font-size:.68rem;}
 .bagov-cell.craftcell{box-shadow:0 0 12px rgba(0,229,255,.9),inset 0 0 8px rgba(0,229,255,.25);}
 .bagov-empty{color:#64748b;font-size:.82rem;text-align:center;padding:30px 10px;}
 
+/* ══ 道具欄收納 ══ */
 .bagov-fold{border:1px solid #2e3b4e;border-radius:7px;background:#0c1219;
  flex:0 0 auto;overflow:hidden;}
 .bagov-fold > summary{cursor:pointer;list-style:none;padding:8px 12px;font-size:.84rem;
@@ -540,59 +535,92 @@ window.HY = window.HY || {};
 .bagov-fold > summary:hover{color:#fcd34d;}
 .bagov-fold .fold-body{padding:10px 11px;border-top:1px solid #2e3b4e;}
 .bagov-fold .fold-note{margin-left:auto;font-size:.7rem;color:#64748b;font-weight:normal;}
-.bagov-fold #poe-craft-bench{margin:0!important;border-radius:6px!important;}
 .bagov-fold .inv-filter-bar{margin-bottom:8px!important;}
+
+/* ══ ★ 通貨倉庫（PoE 風）══ */
+.bagov-stash-top{background:linear-gradient(90deg,#241d10,#1c2432);border:1px solid #fbbf24;
+ border-radius:7px;padding:9px 12px;flex:0 0 auto;}
+.bagov-stash-top .st-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.bagov-stash-top .st-title{font-size:.9rem;font-weight:bold;color:#fde68a;}
+.bagov-stash-top .st-note{font-size:.71rem;color:#94a3b8;}
+.bagov-stash-top .st-tgt{margin-left:auto;font-size:.76rem;color:#7dd3fc;}
+.bagov-stash-top .st-tgt b{color:#6ee7b7;}
+.bagov-tabsbar{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
+.bagov-stab{background:#121a22;color:#94a3b8;border:1px solid #2e3b4e;border-radius:5px 5px 0 0;
+ padding:4px 14px;font-size:.76rem;cursor:pointer;border-bottom:none;}
+.bagov-stab.on{color:#fde68a;border-color:#fbbf24;background:rgba(251,191,36,.12);font-weight:bold;}
+
+.bagov-sgrid{background:#0c1117;border:1px solid #3a3320;border-radius:0 6px 6px 6px;
+ padding:10px;flex:0 0 auto;}
+.bagov-sgrid .sg-label{font-size:.72rem;color:#94a3b8;margin-bottom:7px;display:flex;
+ align-items:center;gap:8px;flex-wrap:wrap;}
+.bagov-sgrid .sg-cells{display:grid;gap:6px;}
+.bagov-orb{position:relative;aspect-ratio:1/1;background:#131a22;border:1px solid #3a4453;
+ border-radius:5px;cursor:pointer;display:flex;flex-direction:column;align-items:center;
+ justify-content:center;gap:1px;padding:2px;box-sizing:border-box;
+ transition:transform .1s,border-color .12s,box-shadow .12s;}
+.bagov-orb:hover:not(.off){transform:translateY(-2px) scale(1.05);z-index:3;}
+.bagov-orb .oi{font-size:1.35rem;line-height:1;}
+.bagov-orb .on{font-size:.56rem;color:#cbd5e1;text-align:center;max-width:100%;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.bagov-orb .oc{position:absolute;right:2px;bottom:1px;font-size:.58rem;font-weight:bold;
+ color:#fff;text-shadow:0 1px 3px #000;}
+.bagov-orb .ot{position:absolute;left:2px;top:1px;font-size:.5rem;color:#64748b;}
+.bagov-orb.off{opacity:.34;cursor:not-allowed;filter:grayscale(.75);}
+.bagov-orb.empty{background:#0e141b;border-style:dashed;cursor:default;}
+.bagov-orb.vaal{border-color:#dc2626;box-shadow:0 0 8px rgba(220,38,38,.5);}
+
+.bagov-tgtbox{background:#121a22;border:1px solid #00e5ff;border-radius:7px;padding:9px 11px;
+ flex:0 0 auto;}
+.bagov-tgtbox .tb-h{font-size:.8rem;font-weight:bold;color:#67e8f9;margin-bottom:6px;
+ display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.bagov-tgtbox .tb-h .tb-n{font-size:.7rem;color:#94a3b8;font-weight:normal;margin-left:auto;}
+.bagov-tgtbox .tb-empty{font-size:.76rem;color:#64748b;line-height:1.6;}
+.bagov-mods{font-size:.75rem;line-height:1.6;}
+.bagov-mods .m-base{color:#cbd5e1;}
+.bagov-mods .m-imp{color:#34d399;font-weight:bold;}
+.bagov-mods .m-pf{color:#38bdf8;}
+.bagov-mods .m-sf{color:#a78bfa;}
+.bagov-mods .m-uq{color:#f97316;font-weight:bold;}
+.bagov-mods .m-corr{color:#dc2626;font-weight:bold;}
+.bagov-mods .m-none{color:#64748b;}
 
 .bagov-foot{padding:7px 14px;font-size:.73rem;color:#94a3b8;background:#121a22;
  border-top:1px solid #23303e;display:flex;gap:12px;flex-wrap:wrap;align-items:center;flex:0 0 auto;}
 .bagov-foot b{color:#e2e8f0;}
 
-/* ══ Tooltip ══ */
-.bagov-tt{position:fixed;z-index:9900;width:310px;max-width:94vw;pointer-events:none;
- background:rgba(9,14,20,.975);border:1px solid #334155;border-radius:7px;
- box-shadow:0 14px 42px rgba(0,0,0,.88);padding:10px 12px;font-size:.76rem;
+/* ══ ★ 雙裝備視窗 ══ */
+.bagov-iw{position:fixed;z-index:9900;width:308px;max-width:46vw;pointer-events:none;
+ background:rgba(8,12,17,.985);border:2px solid #334155;border-radius:7px;
+ box-shadow:0 16px 46px rgba(0,0,0,.92);padding:10px 12px;font-size:.76rem;
  color:#cbd5e1;line-height:1.55;}
-.bagov-tt.cmp{width:470px;}
-.bagov-tt .th{font-size:.94rem;font-weight:bold;margin-bottom:2px;}
-.bagov-tt .ts{font-size:.68rem;color:#64748b;margin-bottom:6px;}
-.bagov-tt .tsec{margin-top:6px;padding-top:6px;border-top:1px dashed #26313d;}
-.bagov-tt .tline{display:flex;justify-content:space-between;gap:8px;font-size:.73rem;}
-.bagov-tt .tline .k{color:#94a3b8;}
-.bagov-tt .tline .v{color:#e2e8f0;font-weight:bold;text-align:right;max-width:62%;}
-.bagov-tt .imp{color:#34d399;font-weight:bold;padding:3px 0;font-size:.75rem;}
-.bagov-tt .pf{color:#38bdf8;font-size:.74rem;}
-.bagov-tt .sf{color:#a78bfa;font-size:.74rem;}
-.bagov-tt .uq{color:#f97316;font-weight:bold;font-size:.75rem;}
-.bagov-tt .dim{color:#64748b;font-size:.72rem;}
-.bagov-tt .up{color:#4ade80;font-weight:bold;}
-.bagov-tt .dn{color:#f87171;font-weight:bold;}
-.bagov-tt .eq{color:#64748b;font-weight:normal;}
-.bagov-tt .corr{color:#dc2626;font-weight:bold;}
+.bagov-iw.hover{border-color:#34d399;}
+.bagov-iw.equipped{border-color:#64748b;opacity:.97;}
+.bagov-iw .iwtag{font-size:.63rem;padding:1px 7px;border-radius:8px;display:inline-block;
+ margin-bottom:5px;font-weight:bold;}
+.bagov-iw.hover .iwtag{background:rgba(52,211,153,.18);border:1px solid #34d399;color:#6ee7b7;}
+.bagov-iw.equipped .iwtag{background:rgba(100,116,139,.18);border:1px solid #475569;color:#94a3b8;}
+.bagov-iw .th{font-size:.94rem;font-weight:bold;margin-bottom:2px;}
+.bagov-iw .ts{font-size:.68rem;color:#64748b;margin-bottom:6px;}
+.bagov-iw .tsec{margin-top:6px;padding-top:6px;border-top:1px dashed #26313d;}
+.bagov-iw .tline{display:flex;justify-content:space-between;gap:8px;font-size:.73rem;}
+.bagov-iw .tline .k{color:#94a3b8;}
+.bagov-iw .tline .v{color:#e2e8f0;font-weight:bold;text-align:right;max-width:62%;}
+.bagov-iw .imp{color:#34d399;font-weight:bold;padding:3px 0;font-size:.75rem;}
+.bagov-iw .pf{color:#38bdf8;font-size:.74rem;}
+.bagov-iw .sf{color:#a78bfa;font-size:.74rem;}
+.bagov-iw .uq{color:#f97316;font-weight:bold;font-size:.75rem;}
+.bagov-iw .dim{color:#64748b;font-size:.72rem;}
+.bagov-iw .corr{color:#dc2626;font-weight:bold;}
+.bagov-iw .lore{color:#64748b;font-style:italic;font-size:.71rem;margin-top:5px;}
 
-/* ══ ★ 對照表 ══ */
-.bagov-cmp{margin-top:8px;padding-top:7px;border-top:1px solid #26313d;}
-.bagov-cmp .ch{font-size:.72rem;color:#fbbf24;font-weight:bold;margin-bottom:5px;line-height:1.5;}
-.bagov-cmp .ch .tgt{color:#94a3b8;font-weight:normal;}
-.bagov-cmp .ch .nq{font-weight:bold;}
-.bagov-cmp table{width:100%;border-collapse:collapse;font-size:.71rem;table-layout:fixed;}
-.bagov-cmp th{color:#64748b;font-weight:normal;text-align:left;padding:2px 5px;
- border-bottom:1px solid #1e293b;font-size:.67rem;white-space:nowrap;}
-.bagov-cmp th.n{color:#6ee7b7;text-align:right;}
-.bagov-cmp th.o{color:#94a3b8;text-align:right;}
-.bagov-cmp th.d{text-align:right;}
-.bagov-cmp td{padding:2px 5px;border-bottom:1px solid #161f29;}
-.bagov-cmp td:first-child{color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.bagov-cmp td.n{color:#e2e8f0;font-weight:bold;text-align:right;font-variant-numeric:tabular-nums;}
-.bagov-cmp td.o{color:#94a3b8;text-align:right;font-variant-numeric:tabular-nums;}
-.bagov-cmp td.d{text-align:right;font-weight:bold;font-variant-numeric:tabular-nums;}
-.bagov-cmp td.d.up{color:#4ade80;}
-.bagov-cmp td.d.dn{color:#f87171;}
-.bagov-cmp td.d.eq{color:#64748b;font-weight:normal;}
-.bagov-cmp tr.pw td{border-top:1px solid #26313d;padding-top:4px;border-bottom:none;}
-.bagov-cmp tr.pw td:first-child{color:#fbbf24;font-weight:bold;}
-.bagov-cmp .note{font-size:.68rem;color:#64748b;margin-top:4px;line-height:1.45;}
+.bagov-diff{position:fixed;z-index:9902;pointer-events:none;font-size:.73rem;font-weight:bold;
+ padding:3px 11px;border-radius:11px;border:1px solid #fbbf24;
+ background:rgba(8,12,17,.97);box-shadow:0 6px 20px rgba(0,0,0,.8);white-space:nowrap;}
+.bagov-diff.up{border-color:#4ade80;color:#4ade80;}
+.bagov-diff.dn{border-color:#f87171;color:#f87171;}
+.bagov-diff.eq{border-color:#64748b;color:#94a3b8;}
 
-/* ══ 右鍵選單 ══ */
 .bagov-ctx{position:fixed;z-index:9950;min-width:172px;background:#0d141b;
  border:1px solid #34d399;border-radius:6px;box-shadow:0 12px 34px rgba(0,0,0,.88);
  padding:4px;font-size:.78rem;}
@@ -615,17 +643,19 @@ window.HY = window.HY || {};
 #bagov-float .fb{display:inline-block;background:#ef4444;color:#fff;border-radius:9px;
  font-size:.66rem;padding:0 6px;min-width:17px;text-align:center;line-height:17px;font-weight:bold;}
 
+#bagov-hold{display:none!important;}
+
 @media (max-width:1000px){
   .bagov-left{width:250px;flex-basis:250px;}
   .bagov-slot{min-height:44px;padding:4px 6px;}
   .bagov-slot .si{font-size:.66rem;}
-  .bagov-tt.cmp{width:400px;}
+  .bagov-iw{width:268px;}
 }
 @media (max-width:820px){
   .bagov-left{width:214px;flex-basis:214px;}
   .bagov-slot .sn{display:none;}
   .bagov-slot{min-height:38px;}
-  .bagov-tt.cmp{width:min(94vw,360px);}
+  .bagov-iw{width:min(46vw,240px);font-size:.72rem;}
 }
 `;
     var st = document.createElement('style');
@@ -668,6 +698,10 @@ window.HY = window.HY || {};
       var p = APP().poeSys;
       return p && p.selectedTargetUid ? String(p.selectedTargetUid) : null;
     }, null);
+  }
+  function craftTargetItem() {
+    var u = craftTargetUid();
+    return u ? findAny(u) : null;
   }
 
   function sortVal(it, k) {
@@ -718,48 +752,8 @@ window.HY = window.HY || {};
   }
 
   /* ══════════════════════════════════════════════════════
-     ★ 裝備對比（v7 新增）
+     對比對象
      ══════════════════════════════════════════════════════ */
-  var STAT_ORDER = ['atk', 'def', 'maxHp', 'maxMp', 'hit', 'eva', 'crit', 'critRes', 'critDmg', 'atkSpd', 'dmgReduce',
-                    'str', 'con', 'agi', 'int'];
-  var STAT_NAME = {
-    atk: '攻擊', def: '防禦', maxHp: '氣血', maxMp: '內力',
-    hit: '命中', eva: '閃避', crit: '爆擊', critRes: '暴抗', critDmg: '爆傷',
-    atkSpd: '攻速', dmgReduce: '減傷',
-    str: '力道', con: '體魄', agi: '身法', int: '內息',
-    atkPct: '攻擊%', defPct: '防禦%', hpPct: '氣血%', maxHpPct: '氣血%',
-    spMul: '武學加成', expMul: '歷練', goldMul: '紋銀', dropMul: '掉寶'
-  };
-  var PCT_KEYS = { hit: 1, eva: 1, crit: 1, critRes: 1, critDmg: 1, dmgReduce: 1 };
-
-  function statNameOf(k) {
-    if (STAT_NAME[k]) return STAT_NAME[k];
-    var s = String(k).replace(/Pct$/, '%').replace(/Mul$/, '%').replace(/Rate$/, '%');
-    return s;
-  }
-  function isPctKey(k) {
-    if (PCT_KEYS[k]) return true;
-    return /(Pct|Mul|Rate)$/.test(String(k));
-  }
-  function statValText(k, v) {
-    var n = num(v, 0);
-    if (n === 0) return '—';
-    if (isPctKey(k)) {
-      var x = PCT_KEYS[k] ? n : n * 100;
-      return (Math.round(x * 10) / 10) + '%';
-    }
-    return (n > 0 ? '+' : '') + fmt(n);
-  }
-  function statValPlain(k, v) {
-    var n = Math.abs(num(v, 0));
-    if (isPctKey(k)) {
-      var x = PCT_KEYS[k] ? n : n * 100;
-      return (Math.round(x * 10) / 10) + '%';
-    }
-    return fmt(n);
-  }
-
-  /** 找出「這件裝備會取代的那件已裝備」 */
   function compareTarget(item) {
     if (!item) return null;
     var st = String(item.slotType || '');
@@ -775,102 +769,12 @@ window.HY = window.HY || {};
     if (!st) return null;
     return eq[st] || null;
   }
-  function ringOther(item) {
-    if (String(item.slotType || '') !== 'ring') return null;
-    var eq = ACC.equipped() || {};
-    var tgt = compareTarget(item);
-    if (!tgt) return null;
-    var other = (tgt === eq.ring_left) ? eq.ring_right : eq.ring_left;
-    return other && other !== tgt ? other : null;
-  }
-
-  function compareHtml(item) {
-    if (!CFG.COMPARE) return '';
-    var old = compareTarget(item);
-    var pa = ACC.itemPower(item);
-
-    if (!old) {
-      return '<div class="bagov-cmp"><div class="ch">🆕 該部位尚未裝備 <span class="tgt">— 可直接穿上</span></div>' +
-        '<table><tr class="pw"><td>戰力</td><td class="n">' + fmt(pa) + '</td><td class="o">0</td>' +
-        '<td class="d up">▲ +' + fmt(pa) + '</td></tr></table></div>';
-    }
-
-    var nb = ACC.itemBonus(item), ob = ACC.itemBonus(old);
-    var seen = {}, keys = [];
-    [nb, ob].forEach(function (b) {
-      Object.keys(b || {}).forEach(function (k) {
-        if (seen[k]) return;
-        seen[k] = 1;
-        if (typeof b[k] === 'number' && isFinite(b[k]) && b[k] !== 0) keys.push(k);
-        else if ((typeof nb[k] === 'number' && nb[k] !== 0) || (typeof ob[k] === 'number' && ob[k] !== 0)) keys.push(k);
-      });
-    });
-    keys.sort(function (a, b) {
-      var ia = STAT_ORDER.indexOf(a), ib = STAT_ORDER.indexOf(b);
-      if (ia === -1) ia = 999;
-      if (ib === -1) ib = 999;
-      return ia - ib || String(a).localeCompare(String(b));
-    });
-
-    var rn = rarityOf(item), ro = rarityOf(old);
-    var h = '<div class="bagov-cmp">';
-    h += '<div class="ch">⚖️ 與已裝備比較 —— <span class="tgt">對手：</span>' +
-      '<span class="nq" style="color:' + ro.color + '">' + esc(String(old.rareTitle || '') + String(old.name || '裝備')) + '</span>' +
-      '<span class="tgt">　[' + ro.short + '] Lv.' + num(old.reqLv, 1) + '</span></div>';
-
-    h += '<table><thead><tr>' +
-      '<th>屬性</th>' +
-      '<th class="n">🆕 背包中</th>' +
-      '<th class="o">✅ 已裝備</th>' +
-      '<th class="d">差異</th>' +
-      '</tr></thead><tbody>';
-
-    if (!keys.length) {
-      h += '<tr><td colspan="4" style="color:#64748b;text-align:center;padding:5px">（雙方皆無基礎屬性詞條）</td></tr>';
-    } else {
-      keys.forEach(function (k) {
-        var nv = num(nb[k], 0), ov = num(ob[k], 0);
-        var d = nv - ov;
-        var eps = isPctKey(k) && !PCT_KEYS[k] ? 0.00005 : 0.0005;
-        var cls = Math.abs(d) < eps ? 'eq' : (d > 0 ? 'up' : 'dn');
-        var dt = Math.abs(d) < eps ? '─ 0' : ((d > 0 ? '▲ +' : '▼ −') + statValPlain(k, d));
-        h += '<tr>' +
-          '<td title="' + esc(statNameOf(k)) + '">' + esc(statNameOf(k)) + '</td>' +
-          '<td class="n">' + esc(statValText(k, nv)) + '</td>' +
-          '<td class="o">' + esc(statValText(k, ov)) + '</td>' +
-          '<td class="d ' + cls + '">' + dt + '</td>' +
-          '</tr>';
-      });
-    }
-
-    var pd = pa - ACC.itemPower(old);
-    var pcls = Math.abs(pd) < 1 ? 'eq' : (pd > 0 ? 'up' : 'dn');
-    var pdt = Math.abs(pd) < 1 ? '─ 0' : ((pd > 0 ? '▲ +' : '▼ −') + fmt(Math.abs(pd)));
-    h += '<tr class="pw">' +
-      '<td>戰力評分</td>' +
-      '<td class="n">' + fmt(pa) + '</td>' +
-      '<td class="o">' + fmt(ACC.itemPower(old)) + '</td>' +
-      '<td class="d ' + pcls + '">' + pdt + '</td>' +
-      '</tr>';
-
-    h += '</tbody></table>';
-
-    var notes = [];
-    if (pd > 0) notes.push('✅ 戰力較高，建議更換');
-    else if (pd < 0) notes.push('⚠️ 戰力較低，不建議更換');
-    else notes.push('⚖️ 戰力相當');
-    var o = ringOther(item);
-    if (o) notes.push('另有另一只戒指：' + String(o.name || '') + '（戰力 ' + fmt(ACC.itemPower(o)) + '）');
-    h += '<div class="note">' + notes.map(esc).join('　·　') + '</div>';
-    h += '</div>';
-    return h;
-  }
 
   /* ══════════════════════════════════════════════════════
-     Tooltip
+     ★ 裝備詳細視窗 HTML（給雙視窗用）
      ══════════════════════════════════════════════════════ */
-  function tooltipHtml(it, showCompare) {
-    if (!it) return '';
+  function itemDetailHtml(it) {
+    if (!it) return '<div class="dim">（無）</div>';
     var r = rarityOf(it), fl = num(it._forgeLv, 0);
     var reqLv = num(it.reqLv, 1), canUse = ACC.myLevel() >= reqLv;
     var h = '';
@@ -879,8 +783,7 @@ window.HY = window.HY || {};
     h += '<div class="ts">需求 Lv.' + reqLv + (canUse ? '' : ' <span class="corr">（等級不足）</span>') +
       ' · ' + esc(slotNameOf(String(it.slotType || ''))) +
       (it.corrupted ? ' · <span class="corr">[已汙染]</span>' : '') +
-      (isLocked(it) ? ' · 🔒' : '') +
-      (equippedUidMap()[uidOf(it)] ? ' · ✅ 已裝備' : '') + '</div>';
+      (isLocked(it) ? ' · 🔒' : '') + '</div>';
 
     if (it.baseStats && typeof it.baseStats === 'object' && Object.keys(it.baseStats).length) {
       h += '<div class="tline"><span class="k">固有基底</span><span class="v">' + esc(formatBonus(it.baseStats)) + '</span></div>';
@@ -911,39 +814,107 @@ window.HY = window.HY || {};
       '<div class="tline"><span class="k">戰力評分</span><span class="v">' + fmt(ACC.itemPower(it)) + '</span></div>' +
       '<div class="tline"><span class="k">典當價</span><span class="v" style="color:#fcd34d">' + fmt(sellPrice(it)) + ' 兩</span></div>' +
       '</div>';
-
-    /* ★ 對比表（只在「背包中的裝備」顯示） */
-    if (showCompare !== false && !equippedUidMap()[uidOf(it)]) {
-      try { h += compareHtml(it); } catch (e) { warn('對比表失敗：', e); }
-    }
+    if (it.desc) h += '<div class="lore">' + esc(it.desc) + '</div>';
     return h;
   }
 
-  function ensureTT() {
-    if (_ttEl && _ttEl.parentNode) return _ttEl;
-    _ttEl = document.createElement('div');
-    _ttEl.className = 'bagov-tt';
-    _ttEl.style.display = 'none';
-    document.body.appendChild(_ttEl);
-    return _ttEl;
+  /* ══════════════════════════════════════════════════════
+     ★ 雙裝備視窗
+     ══════════════════════════════════════════════════════ */
+  function ensureIW(k) {
+    if (_iwEl[k] && _iwEl[k].parentNode) return _iwEl[k];
+    var el = document.createElement('div');
+    el.className = 'bagov-iw';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    _iwEl[k] = el;
+    return el;
   }
-  function placeTT(x, y) {
-    if (!_ttEl || _ttEl.style.display !== 'block') return;
-    var r = _ttEl.getBoundingClientRect();
+  function ensureBadge() {
+    if (_iwEl.badge && _iwEl.badge.parentNode) return _iwEl.badge;
+    var el = document.createElement('div');
+    el.className = 'bagov-diff';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    _iwEl.badge = el;
+    return el;
+  }
+  function placeEl(el, x, y) {
+    if (!el) return;
+    var r = el.getBoundingClientRect();
     var vw = window.innerWidth, vh = window.innerHeight;
-    var left = x + 16, top = y + 14;
-    if (left + r.width > vw - 8) left = Math.max(8, x - r.width - 16);
+    var left = x, top = y;
+    if (left + r.width > vw - 8) left = Math.max(8, vw - r.width - 8);
+    if (left < 8) left = 8;
     if (top + r.height > vh - 8) top = Math.max(8, vh - r.height - 8);
-    _ttEl.style.left = left + 'px'; _ttEl.style.top = top + 'px';
+    if (top < 8) top = 8;
+    el.style.left = Math.round(left) + 'px';
+    el.style.top = Math.round(top) + 'px';
   }
-  function showTT(html, x, y, wide) {
-    var el = ensureTT();
-    el.innerHTML = html;
-    if (wide) el.classList.add('cmp'); else el.classList.remove('cmp');
-    el.style.display = 'block';
-    placeTT(x, y);
+
+  /** 顯示雙視窗：右＝滑鼠目標、左＝已裝備 */
+  function showPair(item, x, y) {
+    var A = ensureIW('a'), B = ensureIW('b'), badge = ensureBadge();
+    var old = compareTarget(item);
+
+    /* 右視窗：滑鼠目標 */
+    A.className = 'bagov-iw hover';
+    A.innerHTML = '<span class="iwtag">🆕 滑鼠目標</span>' + itemDetailHtml(item);
+    A.style.display = 'block';
+
+    /* 左視窗：當前角色同部位 */
+    if (old) {
+      B.className = 'bagov-iw equipped';
+      B.innerHTML = '<span class="iwtag">✅ 已裝備（' + esc(slotNameOf(String(old.slotType || ''))) + '）</span>' + itemDetailHtml(old);
+      B.style.display = 'block';
+    } else {
+      B.style.display = 'none';
+    }
+
+    /* 定位：A 在游標右側，B 在 A 左側 */
+    placeEl(A, x + 18, y + 14);
+    var ar = A.getBoundingClientRect();
+    if (old) {
+      var br = B.getBoundingClientRect();
+      var bx = ar.left - br.width - 10;
+      if (bx < 8) bx = Math.min(window.innerWidth - br.width - 8, ar.right + 10);
+      placeEl(B, bx, ar.top);
+    }
+
+    /* 差異徽章（置於 A 上方） */
+    if (CFG.COMPARE) {
+      var pa = ACC.itemPower(item);
+      var pb = old ? ACC.itemPower(old) : 0;
+      var d = pa - pb;
+      var cls = !old ? 'up' : (Math.abs(d) < 1 ? 'eq' : (d > 0 ? 'up' : 'dn'));
+      badge.className = 'bagov-diff ' + cls;
+      badge.textContent = !old
+        ? ('⚖️ 該部位未裝備　戰力 ' + fmt(pa))
+        : (Math.abs(d) < 1 ? ('⚖️ 戰力相當 ' + fmt(pa))
+          : ('⚖️ 戰力 ' + (d > 0 ? '▲ +' : '▼ −') + fmt(Math.abs(d)) + '（' + fmt(pa) + ' vs ' + fmt(pb) + '）'));
+      badge.style.display = 'block';
+      var ar2 = A.getBoundingClientRect();
+      placeEl(badge, ar2.left, ar2.top - 26);
+    } else {
+      badge.style.display = 'none';
+    }
   }
-  function hideTT() { if (_ttTimer) { clearTimeout(_ttTimer); _ttTimer = null; } if (_ttEl) _ttEl.style.display = 'none'; }
+  function hidePair() {
+    if (_ttTimer) { clearTimeout(_ttTimer); _ttTimer = null; }
+    ['a', 'b', 'badge'].forEach(function (k) { if (_iwEl[k]) _iwEl[k].style.display = 'none'; });
+  }
+  function placePair(x, y) {
+    if (!_iwEl.a || _iwEl.a.style.display !== 'block') return;
+    placeEl(_iwEl.a, x + 18, y + 14);
+    var ar = _iwEl.a.getBoundingClientRect();
+    if (_iwEl.b && _iwEl.b.style.display === 'block') {
+      var br = _iwEl.b.getBoundingClientRect();
+      var bx = ar.left - br.width - 10;
+      if (bx < 8) bx = Math.min(window.innerWidth - br.width - 8, ar.right + 10);
+      placeEl(_iwEl.b, bx, ar.top);
+    }
+    if (_iwEl.badge && _iwEl.badge.style.display === 'block') placeEl(_iwEl.badge, ar.left, ar.top - 26);
+  }
 
   /* ══════════════════════════════════════════════════════
      右鍵選單
@@ -991,8 +962,8 @@ window.HY = window.HY || {};
         fn: function () { doEquip(it, null); }
       });
     }
-    items.push({ t: '⚖️ 顯示對比', fn: function () { _selUid = uidOf(it); renderModal(); } });
-    items.push({ t: '🎯 選為工藝目標', fn: function () { selectCraft(it); } });
+    items.push({ t: '🗃️ 送去通貨倉庫改造', fn: function () { selectCraft(it, true); } });
+    items.push({ t: '🎯 選為改造目標', fn: function () { selectCraft(it, false); } });
     items.push({ t: locked ? '🔓 解除鎖定' : '🔒 鎖定', fn: function () { setLocked(it, !locked); renderModal(); } });
     items.push({ sep: true });
     items.push({ t: '💰 典當（' + fmt(sellPrice(it)) + ' 兩）', danger: true, dis: locked, fn: function () { doSell(it); } });
@@ -1012,7 +983,7 @@ window.HY = window.HY || {};
     var it = (ACC.equipped() || {})[slotId];
     if (!it) return;
     openMenu(x, y, [
-      { t: '🎯 選為工藝目標', fn: function () { selectCraft(it); } },
+      { t: '🗃️ 送去通貨倉庫改造', fn: function () { selectCraft(it, true); } },
       { t: '🔄 卸下', dis: !ACC.unequip, fn: function () { doUnequip(slotId); } },
       { sep: true },
       {
@@ -1041,21 +1012,18 @@ window.HY = window.HY || {};
   function afterChange() {
     var a = APP();
     if (typeof a.renderAll === 'function') safe(function () { a.renderAll(); });
+    refreshOriginals();
     if (_open) renderModal();
     updateFloatBadge();
   }
 
-  function selectCraft(it) {
+  function selectCraft(it, gotoStash) {
     var poe = safe(function () { return APP().poeSys; }, null);
     if (!poe || !it) return;
     poe.selectedTargetUid = it.uid;
-    renderModal();
-    toast('已選為工藝目標：' + String(it.name || ''));
-    var fold = document.getElementById('bagov-fold-craft');
-    if (fold) {
-      fold.open = true;
-      try { fold.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
-    }
+    toast('改造目標：' + String(it.name || ''));
+    if (gotoStash) { _page = 'stash'; renderModal(); }
+    else { renderModal(); }
   }
 
   function findEquipUI() {
@@ -1073,29 +1041,11 @@ window.HY = window.HY || {};
     return null;
   }
 
-  /** 讓原版節點回到 document（若已 detached 則重新掛回 host） */
-  function reattachOriginals() {
-    var craftHost = document.getElementById('bagov-crafthost');
-    var bagHost = document.getElementById('bagov-baghost');
-    if (craftHost && _orig.craft && !craftHost.contains(_orig.craft)) {
-      try { craftHost.appendChild(_orig.craft); } catch (e) {}
-    }
-    if (bagHost) {
-      if (_orig.bagFilter && !bagHost.contains(_orig.bagFilter)) {
-        try { bagHost.appendChild(_orig.bagFilter); } catch (e) {}
-      }
-      if (_orig.bagList && !bagHost.contains(_orig.bagList)) {
-        try { bagHost.appendChild(_orig.bagList); } catch (e) {}
-      }
-    }
-  }
-
-  /** 更新原版節點內容（節點在不在 document 都能運作） */
   function refreshCraft() {
     var ui = findEquipUI();
     if (!ui) return false;
     try { ui.renderInventoryTab(); return true; }
-    catch (e) { warn('刷新工藝台失敗：', e); return false; }
+    catch (e) { warn('刷新失敗：', e); return false; }
   }
 
   function doEquip(it, targetSlot) {
@@ -1210,9 +1160,153 @@ window.HY = window.HY || {};
   }
 
   /* ══════════════════════════════════════════════════════
-     ★ 原版節點：快取 / 搬移 / 歸位
+     ★ 通貨倉庫（PoE 風）
      ══════════════════════════════════════════════════════ */
+  function currencyDB() {
+    return safe(function () { return (window.HY.Data && window.HY.Data.CURRENCIES) || {}; }, {}) || {};
+  }
+  function wallet() {
+    return safe(function () { return APP().charSys.rootState.currencies; }, {}) || {};
+  }
+  function orbIcon(orb) {
+    if (orb && orb.icon) return orb.icon;
+    var n = String((orb && orb.name) || '') + String((orb && orb.id) || '');
+    if (/蛻變|transmut/i.test(n)) return '🔵';
+    if (/增幅|augment/i.test(n)) return '🟦';
+    if (/點金|alch/i.test(n)) return '🟡';
+    if (/混沌|chaos/i.test(n)) return '🟠';
+    if (/富豪|regal/i.test(n)) return '🟣';
+    if (/崇高|exalt/i.test(n)) return '🟨';
+    if (/神聖|divine/i.test(n)) return '⚪';
+    if (/無效|annul/i.test(n)) return '⚫';
+    if (/瓦爾|vaal/i.test(n)) return '🩸';
+    if (/改造|alteration/i.test(n)) return '🔷';
+    if (/鏈結|fusing/i.test(n)) return '🔗';
+    if (/重鑄|scour|chaos/i.test(n)) return '🌀';
+    return '💠';
+  }
+  function orbBlocked(orb, tgt) {
+    if (!orb) return { off: true, why: '未知通貨' };
+    if (!tgt) return { off: true, why: '請先選擇改造目標' };
+    if (tgt.corrupted) return { off: true, why: '此裝備已汙染，無法再改造' };
+    var cnt = num(wallet()[orb.id], 0);
+    if (cnt <= 0) return { off: true, why: '數量不足（0）' };
+    if (tgt.rarity === 'unique' && orb.id !== 'orb_vaal') return { off: true, why: '傳奇暗金僅【瓦爾寶珠】可作用' };
+    return { off: false, why: '' };
+  }
+
+  function itemModsHtml(it) {
+    if (!it) return '';
+    var h = '<div class="bagov-mods">';
+    h += '<div class="m-base">固有基底：' + esc(formatBonus(it.baseStats)) + '</div>';
+    if (it.implicit && it.implicit.text) h += '<div class="m-imp">✨ ' + esc(it.implicit.text) + '</div>';
+    var uq = it.uniqueMods || [], pf = it.prefixes || [], sf = it.suffixes || [];
+    uq.forEach(function (u) { h += '<div class="m-uq">' + esc(u.text || '') + '</div>'; });
+    pf.forEach(function (p) {
+      h += '<div class="m-pf">🔹 [前綴 ' + esc(p.tName || '') + '] ' + esc(p.label || '') +
+        ' <b>+' + p.val + esc(p.unit || '') + '</b> <span style="color:#64748b">(' + p.min + '~' + p.max + ')</span></div>';
+    });
+    sf.forEach(function (s) {
+      h += '<div class="m-sf">🔸 [後綴 ' + esc(s.tName || '') + '] ' + esc(s.label || '') +
+        ' <b>+' + s.val + esc(s.unit || '') + '</b> <span style="color:#64748b">(' + s.min + '~' + s.max + ')</span></div>';
+    });
+    if (!uq.length && !pf.length && !sf.length && !it.implicit) {
+      h += '<div class="m-none">（白裝無隨機詞綴）</div>';
+    }
+    if (it.corrupted) h += '<div class="m-corr">【已汙染 Corrupted】</div>';
+    h += '</div>';
+    return h;
+  }
+
+  function stashGridHtml() {
+    var D = currencyDB();
+    var ids = Object.keys(D);
+    var tgt = craftTargetItem();
+    var w = wallet();
+    var n = num(CFG.ORB_COLS, 10);
+    var cells = ids.length ? ids : [];
+
+    var h = '<div class="bagov-sgrid">';
+    h += '<div class="sg-label">🗃️ 通貨格（點擊通貨 → 直接作用於上方改造目標）' +
+      '<span style="margin-left:auto;color:#64748b">共 ' + cells.length + ' 種</span></div>';
+    h += '<div class="sg-cells" style="grid-template-columns:repeat(' + n + ',minmax(0,1fr))">';
+
+    if (!cells.length) {
+      h += '<div class="bagov-empty" style="grid-column:1/-1">HY.Data.CURRENCIES 為空 — 通貨資料未載入。</div>';
+    } else {
+      cells.forEach(function (id) {
+        var orb = D[id];
+        var bl = orbBlocked(orb, tgt);
+        var cnt = num(w[id], 0);
+        var cls = 'bagov-orb';
+        if (bl.off) cls += ' off';
+        if (id === 'orb_vaal') cls += ' vaal';
+        h += '<button class="' + cls + '" data-orb="' + esc(id) + '"' + (bl.off ? ' disabled' : '') + '>' +
+          '<span class="ot">' + esc(String(orb.tierLabel || '').slice(0, 4)) + '</span>' +
+          '<span class="oi">' + orbIcon(orb) + '</span>' +
+          '<span class="on">' + esc(String(orb.name || id).slice(0, 5)) + '</span>' +
+          '<span class="oc">' + cnt + '</span>' +
+          '</button>';
+      });
+      /* 補空格，維持 PoE 格狀感 */
+      var rem = cells.length % n;
+      if (rem !== 0) {
+        for (var i = 0; i < n - rem; i++) h += '<div class="bagov-orb empty"></div>';
+      }
+    }
+    h += '</div></div>';
+    return h;
+  }
+
+  function stashTargetHtml() {
+    var tgt = craftTargetItem();
+    var h = '<div class="bagov-tgtbox">';
+    if (!tgt) {
+      h += '<div class="tb-h">🎯 改造目標 <span class="tb-n">未選擇</span></div>' +
+        '<div class="tb-empty">請點擊左側「十部位」中任一件<b>已裝備</b>的裝備，或先在行囊頁對裝備按右鍵選「🗃️ 送去通貨倉庫改造」。</div>';
+      h += '</div>';
+      return h;
+    }
+    var r = rarityOf(tgt);
+    h += '<div class="tb-h">🎯 改造目標：<span style="color:' + r.color + '">' +
+      esc(String(tgt.rareTitle || '') + String(tgt.name || '')) + '</span>' +
+      '<span class="tb-n">[' + r.short + '] Lv.' + num(tgt.reqLv, 1) + '　戰力 ' + fmt(ACC.itemPower(tgt)) +
+      (tgt.corrupted ? '　<span class="m-corr">[已汙染]</span>' : '') + '</span></div>';
+    h += itemModsHtml(tgt);
+    h += '</div>';
+    return h;
+  }
+
+  function applyOrb(orbId) {
+    var poe = safe(function () { return APP().poeSys; }, null);
+    if (!poe) { toast('工藝系統未載入', 'err'); return; }
+    var tgt = craftTargetItem();
+    if (!tgt) { toast('請先選擇改造目標', 'err'); return; }
+    var D = currencyDB(), orb = D[orbId];
+    var bl = orbBlocked(orb, tgt);
+    if (bl.off) { toast(bl.why, 'err'); return; }
+    if (typeof poe.applyCurrencyToSelected !== 'function') { toast('此通貨無法使用', 'err'); return; }
+    var ok = false;
+    try { ok = poe.applyCurrencyToSelected(orbId); } catch (e) { warn(e); }
+    if (!ok) { toast('使用失敗', 'err'); return; }
+    toast('已使用【' + ((orb && orb.name) || orbId) + '】於【' + String(tgt.name || '') + '】');
+    afterChange();
+  }
+
+  /* ══════════════════════════════════════════════════════
+     原版節點：快取 / 寄放 / 掛載
+     ══════════════════════════════════════════════════════ */
+  function ensureHold() {
+    var hold = document.getElementById('bagov-hold');
+    if (!hold && document.body) {
+      hold = document.createElement('div');
+      hold.id = 'bagov-hold';
+      document.body.appendChild(hold);
+    }
+    return hold;
+  }
   function captureOriginals() {
+    ensureHold();
     if (!_orig.craft) {
       var c = document.getElementById(CFG.CRAFT_ID);
       if (c) { _orig.craft = c; if (c.__bagovHome === undefined) c.__bagovHome = c.parentNode; }
@@ -1225,82 +1319,64 @@ window.HY = window.HY || {};
       var f = document.querySelector(CFG.BAG_FILTER_SEL);
       if (f) { _orig.bagFilter = f; if (f.__bagovHome === undefined) f.__bagovHome = f.parentNode; }
     }
-    _orig.captured = !!(_orig.craft || _orig.bagList);
-    return _orig.captured;
+    return !!(_orig.craft || _orig.bagList);
   }
-
-  /** 若節點已被外部重建（#tab-inventory 整批重繪），更新快取為新節點 */
   function refreshOriginals() {
-    if (_orig.craft && !inDoc(_orig.craft)) {
-      var c = document.getElementById(CFG.CRAFT_ID);
-      if (c && c !== _orig.craft) {
-        _orig.craft = c;
-        if (c.__bagovHome === undefined) c.__bagovHome = c.parentNode;
-        log('工藝台節點已更新');
-      }
+    var c = document.getElementById(CFG.CRAFT_ID);
+    if (c && c !== _orig.craft) {
+      if (_orig.craft && _orig.craft.parentNode) { try { _orig.craft.parentNode.removeChild(_orig.craft); } catch (e) {} }
+      _orig.craft = c;
+      if (c.__bagovHome === undefined) c.__bagovHome = c.parentNode;
     }
-    if (_orig.bagList && !inDoc(_orig.bagList)) {
-      var l = document.getElementById(CFG.BAG_LIST_ID);
-      if (l && l !== _orig.bagList) {
-        _orig.bagList = l;
-        if (l.__bagovHome === undefined) l.__bagovHome = l.parentNode;
-        log('道具欄節點已更新');
-      }
+    var l = document.getElementById(CFG.BAG_LIST_ID);
+    if (l && l !== _orig.bagList) {
+      if (_orig.bagList && _orig.bagList.parentNode) { try { _orig.bagList.parentNode.removeChild(_orig.bagList); } catch (e) {} }
+      _orig.bagList = l;
+      if (l.__bagovHome === undefined) l.__bagovHome = l.parentNode;
     }
-    if (_orig.bagFilter && !inDoc(_orig.bagFilter)) {
-      var f = document.querySelector(CFG.BAG_FILTER_SEL);
-      if (f && f !== _orig.bagFilter) {
-        _orig.bagFilter = f;
-        if (f.__bagovHome === undefined) f.__bagovHome = f.parentNode;
-      }
+    var f = document.querySelector(CFG.BAG_FILTER_SEL);
+    if (f && f !== _orig.bagFilter) {
+      if (_orig.bagFilter && _orig.bagFilter.parentNode) { try { _orig.bagFilter.parentNode.removeChild(_orig.bagFilter); } catch (e) {} }
+      _orig.bagFilter = f;
+      if (f.__bagovHome === undefined) f.__bagovHome = f.parentNode;
     }
   }
-
-  /** 把快取的節點塞進新的 host（★ 不再用 getElementById 找） */
-  function mountOriginals() {
-    var okC = false, okB = false;
-    if (CFG.MOVE_CRAFT && _orig.craft) {
-      var ch = document.getElementById('bagov-crafthost');
-      if (ch && !ch.contains(_orig.craft)) {
-        try { ch.appendChild(_orig.craft); okC = true; } catch (e) {}
-      } else if (ch) okC = true;
-    }
-    if (CFG.MOVE_BAG) {
-      var bh = document.getElementById('bagov-baghost');
-      if (bh) {
-        if (_orig.bagFilter && !bh.contains(_orig.bagFilter)) {
-          try { bh.appendChild(_orig.bagFilter); okB = true; } catch (e) {}
-        } else if (_orig.bagFilter) okB = true;
-        if (_orig.bagList && !bh.contains(_orig.bagList)) {
-          try { bh.appendChild(_orig.bagList); okB = true; } catch (e) {}
-        } else if (_orig.bagList) okB = true;
-      }
-    }
-    _entryLog.craftMoved = okC;
-    _entryLog.bagMoved = okB;
-    return { craft: okC, bag: okB };
-  }
-
-  function unmountOriginals() {
-    [['craft', _orig.craft], ['bagList', _orig.bagList], ['bagFilter', _orig.bagFilter]].forEach(function (p) {
-      var n = p[1];
-      if (!n || n.__bagovHome === undefined) return;
-      try { n.__bagovHome.appendChild(n); } catch (e) {}
+  function parkOriginals() {
+    var hold = ensureHold();
+    if (!hold) return;
+    [_orig.craft, _orig.bagFilter, _orig.bagList].forEach(function (n) {
+      if (!n || hold.contains(n)) return;
+      try { hold.appendChild(n); } catch (e) {}
     });
   }
+  function mountBagOriginals() {
+    var bh = document.getElementById('bagov-baghost');
+    var ok = false;
+    if (!bh) return false;
+    if (_orig.bagFilter) {
+      if (!bh.contains(_orig.bagFilter)) { try { bh.appendChild(_orig.bagFilter); } catch (e) {} }
+      ok = true;
+    }
+    if (_orig.bagList) {
+      if (!bh.contains(_orig.bagList)) { try { bh.appendChild(_orig.bagList); } catch (e) {} }
+      ok = true;
+    }
+    _entryLog.bagMoved = ok;
+    return ok;
+  }
+  function unmountOriginals() { parkOriginals(); }
 
   /* ══════════════════════════════════════════════════════
-     渲染
+     渲染：行囊頁
      ══════════════════════════════════════════════════════ */
   function kv(k, v) { return '<div class="bagov-kv"><span>' + esc(k) + '</span><span>' + esc(v) + '</span></div>'; }
 
-  function slotHtml(s, it) {
+  function slotHtml(s, it, isTarget) {
     var r = it ? rarityOf(it) : null;
     var style = it ? 'border-color:' + r.color + ';box-shadow:0 0 7px ' + r.glow + ';' : '';
     var itemName = it ? String(it.name || '') : '（空）';
-    var title = s.name + (it ? '：' + (it.rareTitle || '') + itemName + '（Lv.' + num(it.reqLv, 1) + '）' : '：空槽位');
-    return '<div class="bagov-slot' + (it ? '' : ' empty') + '" data-slot="' + esc(s.id) + '"' +
-      ' style="' + style + '" title="' + esc(title) + '">' +
+    return '<div class="bagov-slot' + (it ? '' : ' empty') + (isTarget ? ' target' : '') + '" data-slot="' + esc(s.id) + '"' +
+      ' style="' + style + '">' +
       '<span class="ic">' + (it ? itemIcon(it) : s.icon) + '</span>' +
       '<span class="tx">' +
         '<span class="sn">' + esc(s.name) + '</span>' +
@@ -1327,9 +1403,7 @@ window.HY = window.HY || {};
         Object.keys(eq).forEach(function (k) { if (eq[k]) cnt += 1; });
         var sect = sectNameOf(m);
         var nm = String(m.name || '無名');
-        var title = nm + '　Lv.' + num(m.lv, 1) + '　' + sect + '　裝備 ' + cnt + '/10　戰力 ' + fmt(charEquipPower(m));
-        h += '<div class="bagov-char' + (r ? ' on' : '') + '" data-bagov-char="' + esc(charId(m)) + '"' +
-          ' title="' + esc(title) + '">' +
+        h += '<div class="bagov-char' + (r ? ' on' : '') + '" data-bagov-char="' + esc(charId(m)) + '">' +
           '<span class="ci">🧑</span>' +
           '<span class="cinfo">' +
             '<span class="cn">' + esc(nm.length > 10 ? nm.slice(0, 9) + '…' : nm) + '</span>' +
@@ -1364,20 +1438,20 @@ window.HY = window.HY || {};
       .join('');
 
     return '' +
-      '<input class="tb-inp" id="bagov-q" placeholder="🔍 搜尋名稱／詞綴…" value="' + esc(_pref.q) + '" style="width:168px">' +
+      '<input class="tb-inp" id="bagov-q" placeholder="🔍 搜尋名稱／詞綴…" value="' + esc(_pref.q) + '" style="width:164px">' +
       '<select class="tb-sel" id="bagov-rarity">' + rarOpts + '</select>' +
       '<select class="tb-sel" id="bagov-slot">' + slotOpts + '</select>' +
       '<input class="tb-inp sm" id="bagov-lvmin" placeholder="Lv低" value="' + esc(_pref.lvMin) + '">' +
       '<input class="tb-inp sm" id="bagov-lvmax" placeholder="Lv高" value="' + esc(_pref.lvMax) + '">' +
       '<select class="tb-sel" id="bagov-sort">' + sortOpts + '</select>' +
-      '<button class="tb-btn" id="bagov-asc" title="升冪／降冪">' + (_pref.asc ? '↑' : '↓') + '</button>' +
+      '<button class="tb-btn" id="bagov-asc">' + (_pref.asc ? '↑' : '↓') + '</button>' +
       '<label class="cb-note" style="display:flex;align-items:center;gap:4px">' +
       '<input type="checkbox" id="bagov-usable"' + (_pref.onlyUsable ? ' checked' : '') + '> 只看可裝備</label>' +
       '<label class="cb-note" style="display:flex;align-items:center;gap:4px">' +
       '<input type="checkbox" id="bagov-hideeq"' + (_pref.hideEquipped ? ' checked' : '') + '> 隱藏已裝備</label>' +
       '<button class="tb-btn y" id="bagov-best">⚡ 一鍵最佳裝備</button>' +
       '<button class="tb-btn y" id="bagov-purge">🧹 批次典當</button>' +
-      '<button class="tb-btn" id="bagov-gocraft">💎 工藝台</button>' +
+      '<button class="tb-btn gold" id="bagov-stash">🗃️ 通貨倉庫</button>' +
       '<span class="tb-cap ' + capCls + '">📦 <b>' + used + '/' + cap + '</b>　顯示 <b>' + shown +
       '</b>　🔒 <b>' + lockedN + '</b>　☑ <b>' + Object.keys(_checked).length + '</b></span>';
   }
@@ -1393,8 +1467,7 @@ window.HY = window.HY || {};
     return h;
   }
 
-  function renderModal() {
-    if (!_els) return;
+  function renderBag() {
     var eq = ACC.equipped() || {};
     var all = bagAll();
     var list = filteredSorted();
@@ -1402,9 +1475,11 @@ window.HY = window.HY || {};
     var eqMap = equippedUidMap();
     var ctUid = craftTargetUid();
 
-    /* ── 左欄 ── */
     var left = '<div class="bagov-eqtitle">🛡️ 當前角色裝備（十部位）</div><div class="bagov-eq">';
-    slotDefs().forEach(function (s) { left += slotHtml(s, eq[s.id]); });
+    slotDefs().forEach(function (s) {
+      var it = eq[s.id];
+      left += slotHtml(s, it, !!(it && ctUid && uidOf(it) === ctUid));
+    });
     left += '</div>';
 
     var ac = activeChar();
@@ -1431,10 +1506,9 @@ window.HY = window.HY || {};
 
     var ctName = '—';
     if (ctUid) { var ci = findAny(ctUid); if (ci) ctName = String(ci.name || ''); }
-    left += '<div class="bagov-sum"><h4>🎯 工藝目標</h4>' +
+    left += '<div class="bagov-sum"><h4>🗃️ 改造目標</h4>' +
       '<div class="bagov-kv"><span>當前選中</span><span>' + esc(ctName) + '</span></div></div>';
 
-    /* ── 右欄 ── */
     var right = '';
     right += '<div class="bagov-charbar">' + charBarHtml() + '</div>';
     right += '<div class="bagov-tools">' + toolbarHtml() + '</div>';
@@ -1453,9 +1527,7 @@ window.HY = window.HY || {};
         if (_selUid && u === _selUid) cls += ' sel';
         if (isEq) cls += ' eqcell';
         if (isCt) cls += ' craftcell';
-        var title = '[' + r.name + '] ' + String(it.rareTitle || '') + String(it.name || '') +
-          '（Lv.' + num(it.reqLv, 1) + '｜戰力 ' + fmt(ACC.itemPower(it)) + '）';
-        right += '<div class="' + cls + '" data-uid="' + esc(u) + '" title="' + esc(title) + '"' +
+        right += '<div class="' + cls + '" data-uid="' + esc(u) + '"' +
           ' style="border-color:' + (isCt ? '#00e5ff' : r.color) + ';box-shadow:0 0 ' + (r.star * 2) + 'px ' +
           (isCt ? 'rgba(0,229,255,.9)' : r.glow) + '">' +
           '<div class="cu" style="background:' + r.color + '"></div>' +
@@ -1478,39 +1550,129 @@ window.HY = window.HY || {};
       right += '</div>';
     }
 
-    right += '<details class="bagov-fold" id="bagov-fold-craft"' + (ctUid ? ' open' : '') + '>' +
-      '<summary>💎 工藝打造台<span class="fold-note">PoE 通貨洗煉 · 由戰鬥掉落</span></summary>' +
-      '<div class="fold-body" id="bagov-crafthost"></div></details>';
-
     right += '<details class="bagov-fold" id="bagov-fold-bag">' +
       '<summary>📦 道具欄・丹藥奇物<span class="fold-note">支援批量典當</span></summary>' +
       '<div class="fold-body" id="bagov-baghost"></div></details>';
+
+    _els.head.className = 'bagov-head';
+    _els.head.innerHTML = '<span class="bagov-title">🛡️ 裝備行囊</span>' +
+      '<span class="bagov-sub">角色切換 · 懸停對比（雙視窗）· 一鍵換裝 · 批次典當</span>' +
+      '<span class="bagov-headbtns">' +
+      '<button class="bagov-btn gold" id="bagov-stash2">🗃️ 通貨倉庫</button>' +
+      '<button class="bagov-btn" id="bagov-refresh">🔄 重新整理</button>' +
+      '<button class="bagov-btn" id="bagov-wide">⛶ 切換尺寸</button>' +
+      '<button class="bagov-btn r" id="bagov-close">✕ 關閉</button></span>';
 
     _els.body.innerHTML =
       '<div class="bagov-left">' + left + '</div>' +
       '<div class="bagov-right">' + right + '</div>';
 
-    renderFoot(list.length, used);
+    renderFoot(list.length, used, 'bag');
 
-    /* ★ 關鍵順序：先更新快取 → 掛回 host → 才刷新內容 */
     refreshOriginals();
-    mountOriginals();
+    parkOriginals();          /* 先把原版節點安置好（避免被 innerHTML 連根拔起） */
+    mountBagOriginals();
     refreshCraft();
 
-    bind();
+    bindHead();
+    bindBag();
   }
 
-  function renderFoot(shown, used) {
+  /* ══════════════════════════════════════════════════════
+     渲染：通貨倉庫頁
+     ══════════════════════════════════════════════════════ */
+  function renderStash() {
+    var eq = ACC.equipped() || {};
+    var ctUid = craftTargetUid();
+    var tgt = craftTargetItem();
+
+    /* 左欄：十部位（可點選為目標） */
+    var left = '<div class="bagov-eqtitle">🎯 選擇改造目標（點擊已裝備的項目）</div><div class="bagov-eq">';
+    slotDefs().forEach(function (s) {
+      var it = eq[s.id];
+      left += slotHtml(s, it, !!(it && ctUid && uidOf(it) === ctUid));
+    });
+    left += '</div>';
+
+    left += stashTargetHtml();
+
+    var all = bagAll();
+    left += '<div class="bagov-sum"><h4>🎒 行囊可改造（點擊送來改造）</h4>';
+    if (!all.length) {
+      left += '<div class="bagov-dim" style="font-size:.74rem;color:#64748b">行囊沒有裝備。</div>';
+    } else {
+      all.slice(0, 6).forEach(function (it) {
+        var r = rarityOf(it);
+        var isCt = (ctUid && uidOf(it) === ctUid);
+        left += '<div class="bagov-kv" style="cursor:pointer" data-bagov-pick="' + esc(uidOf(it)) + '">' +
+          '<span style="color:' + r.color + ';overflow:hidden;text-overflow:ellipsis">' +
+            esc(String(it.name || '').slice(0, 10)) + (isCt ? ' 🎯' : '') + '</span>' +
+          '<span style="color:#fcd34d">' + fmt(ACC.itemPower(it)) + '</span></div>';
+      });
+    }
+    left += '</div>';
+
+    /* 右欄：通貨格 */
+    var right = '';
+    right += '<div class="bagov-stash-top">' +
+      '<div class="st-head">' +
+      '<span class="st-title">🗃️ 通貨倉庫</span>' +
+      '<span class="st-note">100% 仿 POE：點擊通貨即作用於當前改造目標</span>' +
+      '<span class="st-tgt">目標：<b>' + esc(tgt ? String(tgt.name || '') : '未選擇') + '</b></span>' +
+      '</div>' +
+      '<div class="bagov-tabsbar">' +
+      '<button class="bagov-stab on">💠 通貨</button>' +
+      '<button class="bagov-stab" id="bagov-back">← 返回行囊</button>' +
+      '</div></div>';
+
+    right += stashGridHtml();
+
+    _els.head.className = 'bagov-head gold';
+    _els.head.innerHTML = '<span class="bagov-title">🗃️ 通貨倉庫</span>' +
+      '<span class="bagov-sub">點擊通貨 → 直接改造目標裝備</span>' +
+      '<span class="bagov-headbtns">' +
+      '<button class="bagov-btn" id="bagov-back2">← 返回行囊</button>' +
+      '<button class="bagov-btn" id="bagov-refresh">🔄 重新整理</button>' +
+      '<button class="bagov-btn" id="bagov-wide">⛶ 切換尺寸</button>' +
+      '<button class="bagov-btn r" id="bagov-close">✕ 關閉</button></span>';
+
+    _els.body.innerHTML =
+      '<div class="bagov-left">' + left + '</div>' +
+      '<div class="bagov-right">' + right + '</div>';
+
+    renderFoot(0, bagAll().length, 'stash');
+
+    refreshOriginals();
+    parkOriginals();          /* 通貨倉庫頁不需要原版節點，全部寄放 */
+
+    bindHead();
+    bindStash();
+  }
+
+  /* ══════════════════════════════════════════════════════
+     底部
+     ══════════════════════════════════════════════════════ */
+  function renderFoot(shown, used, page) {
     if (!_els || !_els.foot) return;
-    var lockedN = 0, ctUid = craftTargetUid();
+    var ctUid = craftTargetUid();
+    var tgt = craftTargetItem();
+    if (page === 'stash') {
+      _els.foot.innerHTML =
+        '<span>🗃️ 通貨倉庫</span>' +
+        '<span>目標：<b>' + esc(tgt ? String(tgt.name || '') : '未選擇') + '</b></span>' +
+        '<span>行囊 <b>' + used + '</b> 件</span>' +
+        '<span style="margin-left:auto;color:#64748b">點通貨即使用　Esc 返回行囊　Alt+B 關閉</span>';
+      return;
+    }
+    var lockedN = 0;
     bagAll().forEach(function (it) { if (isLocked(it)) lockedN += 1; });
     _els.foot.innerHTML =
       '<span>顯示 <b>' + shown + '</b> / ' + used + ' 件</span>' +
       '<span>🔒 已鎖定 <b>' + lockedN + '</b></span>' +
       '<span>☑ 已勾選 <b>' + Object.keys(_checked).length + '</b></span>' +
-      (ctUid ? '<span>🎯 工藝目標已選</span>' : '') +
+      (ctUid ? '<span>🗃️ 改造目標已選</span>' : '') +
       '<span style="margin-left:auto;color:#64748b">' +
-      '懸停看詳情＋對比　右鍵開選單　雙擊裝備　Shift+點擊勾選　Esc 關閉</span>';
+      '懸停看詳情＋雙視窗對比　右鍵開選單　雙擊裝備　Shift+點擊勾選　Esc 關閉</span>';
   }
 
   /* ══════════════════════════════════════════════════════
@@ -1521,7 +1683,24 @@ window.HY = window.HY || {};
     if (el && !el.__bagovBound) { el.__bagovBound = true; el.addEventListener(ev, fn); }
   }
 
-  function bind() {
+  function bindHead() {
+    on('bagov-close', 'click', function () {
+      if (_page === 'stash') { _page = 'bag'; renderModal(); return; }
+      close();
+    });
+    on('bagov-back', 'click', function () { _page = 'bag'; renderModal(); });
+    on('bagov-back2', 'click', function () { _page = 'bag'; renderModal(); });
+    on('bagov-stash', 'click', function () { _page = 'stash'; renderModal(); });
+    on('bagov-stash2', 'click', function () { _page = 'stash'; renderModal(); });
+    on('bagov-wide', 'click', function () { _els.modal.classList.toggle('wide'); });
+    on('bagov-refresh', 'click', function () {
+      refreshOriginals();
+      renderModal();
+      toast('已重新整理');
+    });
+  }
+
+  function bindBag() {
     if (!_els || !_els.body) return;
 
     _els.body.querySelectorAll('[data-bagov-char]').forEach(function (el) {
@@ -1565,10 +1744,6 @@ window.HY = window.HY || {};
     on('bagov-usable', 'change', function () { _pref.onlyUsable = this.checked; savePref(); renderModal(); });
     on('bagov-hideeq', 'change', function () { _pref.hideEquipped = this.checked; savePref(); renderModal(); });
     on('bagov-best', 'click', bestGear);
-    on('bagov-gocraft', 'click', function () {
-      var f = document.getElementById('bagov-fold-craft');
-      if (f) { f.open = true; try { f.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} }
-    });
     on('bagov-purge', 'click', function (e) {
       var r = e.target.getBoundingClientRect();
       openMenu(Math.max(8, r.left - 60), r.bottom + 6, [
@@ -1586,6 +1761,7 @@ window.HY = window.HY || {};
       ]);
     });
 
+    /* 裝備欄 */
     _els.body.querySelectorAll('[data-slot]').forEach(function (el) {
       var sid = el.getAttribute('data-slot');
       var it = (ACC.equipped() || {})[sid];
@@ -1593,31 +1769,29 @@ window.HY = window.HY || {};
       el.addEventListener('mouseenter', function (e) {
         var x = e.clientX, y = e.clientY;
         if (_ttTimer) clearTimeout(_ttTimer);
-        _ttTimer = setTimeout(function () { showTT(tooltipHtml(it, false), x, y, false); }, CFG.TOOLTIP_DELAY);
+        _ttTimer = setTimeout(function () { showPair(it, x, y); }, CFG.TOOLTIP_DELAY);
       });
-      el.addEventListener('mousemove', function (e) { placeTT(e.clientX, e.clientY); });
-      el.addEventListener('mouseleave', hideTT);
-      el.addEventListener('contextmenu', function (e) { e.preventDefault(); hideTT(); slotMenu(e.clientX, e.clientY, sid); });
+      el.addEventListener('mousemove', function (e) { placePair(e.clientX, e.clientY); });
+      el.addEventListener('mouseleave', hidePair);
+      el.addEventListener('contextmenu', function (e) { e.preventDefault(); hidePair(); slotMenu(e.clientX, e.clientY, sid); });
       el.addEventListener('click', function () { _selUid = uidOf(it); renderModal(); });
     });
 
+    /* 網格 */
     _els.body.querySelectorAll('[data-uid]').forEach(function (el) {
       var uid = el.getAttribute('data-uid');
       if (!findInBag(uid)) return;
 
-      /* ★ 懸停 → 詳情 ＋ 對比表 */
       el.addEventListener('mouseenter', function (e) {
         var x = e.clientX, y = e.clientY;
         if (_ttTimer) clearTimeout(_ttTimer);
         _ttTimer = setTimeout(function () {
           var c = findInBag(uid);
-          if (!c) return;
-          var isEq = !!equippedUidMap()[uid];
-          showTT(tooltipHtml(c, true), x, y, !isEq);
+          if (c) showPair(c, x, y);
         }, CFG.TOOLTIP_DELAY);
       });
-      el.addEventListener('mousemove', function (e) { placeTT(e.clientX, e.clientY); });
-      el.addEventListener('mouseleave', hideTT);
+      el.addEventListener('mousemove', function (e) { placePair(e.clientX, e.clientY); });
+      el.addEventListener('mouseleave', hidePair);
 
       el.addEventListener('dblclick', function (e) {
         e.preventDefault();
@@ -1629,7 +1803,7 @@ window.HY = window.HY || {};
       });
 
       el.addEventListener('contextmenu', function (e) {
-        e.preventDefault(); hideTT();
+        e.preventDefault(); hidePair();
         var c = findInBag(uid);
         if (c) itemMenu(e.clientX, e.clientY, c);
       });
@@ -1646,6 +1820,86 @@ window.HY = window.HY || {};
     });
   }
 
+  function bindStash() {
+    if (!_els || !_els.body) return;
+
+    /* 十部位：點擊選為目標 */
+    _els.body.querySelectorAll('[data-slot]').forEach(function (el) {
+      var sid = el.getAttribute('data-slot');
+      var it = (ACC.equipped() || {})[sid];
+      el.addEventListener('click', function () {
+        if (!it) { toast('此部位沒有裝備', 'err'); return; }
+        selectCraft(it, false);
+      });
+      if (it) {
+        el.addEventListener('mouseenter', function (e) {
+          var x = e.clientX, y = e.clientY;
+          if (_ttTimer) clearTimeout(_ttTimer);
+          _ttTimer = setTimeout(function () { showPair(it, x, y); }, CFG.TOOLTIP_DELAY);
+        });
+        el.addEventListener('mousemove', function (e) { placePair(e.clientX, e.clientY); });
+        el.addEventListener('mouseleave', hidePair);
+      }
+    });
+
+    /* 行囊快速挑選 */
+    _els.body.querySelectorAll('[data-bagov-pick]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var it = findAny(el.getAttribute('data-bagov-pick'));
+        if (it) selectCraft(it, false);
+      });
+      el.addEventListener('mouseenter', function (e) {
+        var it = findAny(el.getAttribute('data-bagov-pick'));
+        if (!it) return;
+        var x = e.clientX, y = e.clientY;
+        if (_ttTimer) clearTimeout(_ttTimer);
+        _ttTimer = setTimeout(function () { showPair(it, x, y); }, CFG.TOOLTIP_DELAY);
+      });
+      el.addEventListener('mousemove', function (e) { placePair(e.clientX, e.clientY); });
+      el.addEventListener('mouseleave', hidePair);
+    });
+
+    /* 通貨格 */
+    var grid = _els.body.querySelector('.bagov-sgrid');
+    if (grid && !grid.__bagovOrbBound) {
+      grid.__bagovOrbBound = true;
+      grid.addEventListener('click', function (e) {
+        var el = e.target && e.target.closest ? e.target.closest('[data-orb]') : null;
+        if (!el || el.disabled) return;
+        applyOrb(el.getAttribute('data-orb'));
+      });
+      /* 通貨 hover 顯示說明 */
+      grid.addEventListener('mouseover', function (e) {
+        var el = e.target && e.target.closest ? e.target.closest('[data-orb]') : null;
+        if (!el) return;
+        var D = currencyDB(), orb = D[el.getAttribute('data-orb')];
+        if (!orb) return;
+        var tgt = craftTargetItem();
+        var bl = orbBlocked(orb, tgt);
+        var A = ensureIW('a'), B = ensureIW('b'), badge = ensureBadge();
+        A.className = 'bagov-iw hover';
+        A.innerHTML = '<span class="iwtag">💠 通貨</span>' +
+          '<div class="th" style="color:' + esc(orb.color || '#e2e8f0') + '">' + orbIcon(orb) + ' ' + esc(orb.name || '') + '</div>' +
+          '<div class="ts">持有數量：' + num(wallet()[orb.id], 0) + (orb.tierLabel ? '　·　' + esc(orb.tierLabel) : '') + '</div>' +
+          (orb.desc ? '<div class="dim">' + esc(orb.desc) + '</div>' : '') +
+          (bl.off ? '<div class="tsec"><div class="corr">🚫 ' + esc(bl.why) + '</div></div>'
+                  : '<div class="tsec"><div style="color:#6ee7b7">✅ 點擊即作用於：' + esc(String((tgt && tgt.name) || '')) + '</div></div>');
+        A.style.display = 'block';
+        B.style.display = 'none';
+        badge.style.display = 'none';
+        placeEl(A, e.clientX + 18, e.clientY + 14);
+      });
+      grid.addEventListener('mousemove', function (e) {
+        if (_iwEl.a && _iwEl.a.style.display === 'block') placeEl(_iwEl.a, e.clientX + 18, e.clientY + 14);
+      });
+      grid.addEventListener('mouseout', function (e) {
+        var to = e.relatedTarget;
+        if (to && to.closest && to.closest('[data-orb]')) return;
+        hidePair();
+      });
+    }
+  }
+
   /* ══════════════════════════════════════════════════════
      開 / 關
      ══════════════════════════════════════════════════════ */
@@ -1653,24 +1907,16 @@ window.HY = window.HY || {};
     if (_els) return _els;
     if (!document.body) return null;
     injectCSS();
+    ensureHold();
 
     var mask = document.createElement('div');
     mask.className = 'bagov-mask hidden';
     var modal = document.createElement('div');
     modal.className = 'bagov';
-
     var head = document.createElement('div');
     head.className = 'bagov-head';
-    head.innerHTML = '<span class="bagov-title">🛡️ 裝備行囊 & 工藝</span>' +
-      '<span class="bagov-sub">角色切換 · 懸停對比 · 一鍵換裝 · 批次典當 · 工藝打造</span>' +
-      '<span class="bagov-headbtns">' +
-      '<button class="bagov-btn" id="bagov-refresh">🔄 重新整理</button>' +
-      '<button class="bagov-btn" id="bagov-wide">⛶ 切換尺寸</button>' +
-      '<button class="bagov-btn r" id="bagov-close">✕ 關閉</button></span>';
-
     var body = document.createElement('div');
     body.className = 'bagov-body';
-
     var foot = document.createElement('div');
     foot.className = 'bagov-foot';
 
@@ -1678,24 +1924,21 @@ window.HY = window.HY || {};
     mask.appendChild(modal);
     document.body.appendChild(mask);
 
-    _els = { mask: mask, modal: modal, body: body, foot: foot };
+    _els = { mask: mask, modal: modal, head: head, body: body, foot: foot };
 
     mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
-    head.querySelector('#bagov-close').addEventListener('click', close);
-    head.querySelector('#bagov-wide').addEventListener('click', function () { modal.classList.toggle('wide'); });
-    head.querySelector('#bagov-refresh').addEventListener('click', function () {
-      refreshOriginals();
-      renderModal();
-      toast('已重新整理');
-    });
 
     if (!window.__bagovKeyBound) {
       window.__bagovKeyBound = true;
       document.addEventListener('keydown', function (e) {
         if (!_open) return;
-        if (e.key === 'Escape') { if (_ctxEl) { hideCtx(); return; } close(); }
+        if (e.key === 'Escape') {
+          if (_ctxEl) { hideCtx(); return; }
+          if (_page === 'stash') { _page = 'bag'; renderModal(); return; }
+          close();
+        }
       });
-      document.addEventListener('scroll', hideTT, true);
+      document.addEventListener('scroll', hidePair, true);
     }
     return _els;
   }
@@ -1712,10 +1955,8 @@ window.HY = window.HY || {};
     var e = build();
     if (!e) return false;
 
-    /* ① 先快取原版節點（此時還在 #tab-inventory 裡） */
     captureOriginals();
 
-    /* ② 道具欄切到「丹藥奇物」，避免與裝備網格重複 */
     if (CFG.MOVE_BAG) {
       var inv = safe(function () { return APP().inventorySys; }, null);
       if (inv) {
@@ -1724,9 +1965,10 @@ window.HY = window.HY || {};
       }
     }
 
+    _page = 'bag';
     e.mask.classList.remove('hidden');
     _open = true;
-    renderModal();          // 內部：mountOriginals() → refreshCraft()
+    renderModal();
     markTabBtn(true);
     if (_floatBtn) _floatBtn.style.display = 'none';
     return true;
@@ -1736,11 +1978,12 @@ window.HY = window.HY || {};
     if (!_els) return false;
     _els.mask.classList.add('hidden');
     _els.modal.classList.remove('wide');
-    hideTT(); hideCtx();
+    hidePair(); hideCtx();
 
     if (_open) unmountOriginals();
 
     _open = false;
+    _page = 'bag';
     markTabBtn(false);
 
     if (_savedFilter !== null) {
@@ -1753,6 +1996,13 @@ window.HY = window.HY || {};
     return true;
   }
   function toggle() { return _open ? close() : open(); }
+
+  function renderModal() {
+    if (!_els) return;
+    hidePair();
+    if (_page === 'stash') renderStash();
+    else renderBag();
+  }
 
   /* ══════════════════════════════════════════════════════
      分頁攔截
@@ -1786,7 +2036,6 @@ window.HY = window.HY || {};
         open();
       }, true);
     }
-    if (btn) btn.title = '點擊開啟「裝備行囊 & 工藝」彈窗（Alt+B）';
 
     _entryLog.intercept = true;
     return true;
@@ -1808,7 +2057,6 @@ window.HY = window.HY || {};
     var b = document.createElement('button');
     b.id = 'bagov-float';
     b.type = 'button';
-    b.title = '開啟裝備行囊大修（Alt+B）';
     b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); toggle(); });
     document.body.appendChild(b);
     _floatBtn = b;
@@ -1825,53 +2073,40 @@ window.HY = window.HY || {};
      對外 API
      ══════════════════════════════════════════════════════ */
   window.HY.BagOverhaul = {
-    version: '7.0',
+    version: '8.0',
     ready: false,
     open: open, close: close, toggle: toggle,
+    stash: function (v) {
+      if (!_open) open();
+      _page = (v === false) ? 'bag' : 'stash';
+      renderModal();
+      return _page;
+    },
+    page: function () { return _page; },
     install: function () { var a = installIntercept(); var b = installFloat(); return { intercept: a, float: b }; },
     refresh: function () { renderModal(); return true; },
     bestGear: bestGear,
     batchPurge: batchPurge,
     goto: function () { return open(); },
 
-    /** 檢查原版節點狀態（修復驗證） */
     orig: function () {
       var out = {
-        craft: {
-          cached: !!_orig.craft,
-          inDoc: inDoc(_orig.craft),
-          id: _orig.craft ? (_orig.craft.id || '(無id)') : null,
-          parent: _orig.craft && _orig.craft.parentNode ? (_orig.craft.parentNode.id || _orig.craft.parentNode.className || _orig.craft.parentNode.tagName) : null,
-          childCount: _orig.craft ? _orig.craft.children.length : 0
-        },
-        bagList: {
-          cached: !!_orig.bagList,
-          inDoc: inDoc(_orig.bagList),
-          id: _orig.bagList ? (_orig.bagList.id || '(無id)') : null,
-          parent: _orig.bagList && _orig.bagList.parentNode ? (_orig.bagList.parentNode.id || _orig.bagList.parentNode.className || _orig.bagList.parentNode.tagName) : null,
-          childCount: _orig.bagList ? _orig.bagList.children.length : 0
-        },
-        bagFilter: {
-          cached: !!_orig.bagFilter,
-          inDoc: inDoc(_orig.bagFilter),
-          parent: _orig.bagFilter && _orig.bagFilter.parentNode ? (_orig.bagFilter.parentNode.id || _orig.bagFilter.parentNode.className || _orig.bagFilter.parentNode.tagName) : null
-        },
-        hosts: {
-          craftHost: !!document.getElementById('bagov-crafthost'),
-          bagHost: !!document.getElementById('bagov-baghost')
-        }
+        craft: { cached: !!_orig.craft, inDoc: inDoc(_orig.craft), childCount: _orig.craft ? _orig.craft.children.length : 0,
+          parent: _orig.craft && _orig.craft.parentNode ? (_orig.craft.parentNode.id || _orig.craft.parentNode.className || _orig.craft.parentNode.tagName) : null },
+        bagList: { cached: !!_orig.bagList, inDoc: inDoc(_orig.bagList), childCount: _orig.bagList ? _orig.bagList.children.length : 0 },
+        bagFilter: { cached: !!_orig.bagFilter, inDoc: inDoc(_orig.bagFilter) },
+        hold: !!document.getElementById('bagov-hold'),
+        hosts: { bagHost: !!document.getElementById('bagov-baghost') }
       };
       console.log('%c=== 原版節點狀態 ===', 'color:#34d399;font-weight:bold');
       console.table({
-        工藝台快取: out.craft.cached, 工藝台在文件內: out.craft.inDoc,
-        工藝台子節點: out.craft.childCount, 工藝台父容器: out.craft.parent,
-        道具欄快取: out.bagList.cached, 道具欄在文件內: out.bagList.inDoc,
-        道具欄子節點: out.bagList.childCount, 道具欄父容器: out.bagList.parent
+        工藝台快取: out.craft.cached, 工藝台在文件內: out.craft.inDoc, 工藝台子節點: out.craft.childCount,
+        道具欄快取: out.bagList.cached, 道具欄在文件內: out.bagList.inDoc, 道具欄子節點: out.bagList.childCount,
+        寄放區: out.hold, 行囊收納格: out.hosts.bagHost
       });
       return out;
     },
 
-    /** 手動比較某件裝備 */
     compare: function (uidOrIdx) {
       var it = null;
       if (typeof uidOrIdx === 'number') it = bagAll()[uidOrIdx];
@@ -1879,9 +2114,18 @@ window.HY = window.HY || {};
       if (!it) { warn('找不到裝備：' + uidOrIdx); return null; }
       var old = compareTarget(it);
       console.log('%c=== 裝備對比 ===', 'color:#34d399;font-weight:bold');
-      console.log('背包中：', it.name, '｜戰力', ACC.itemPower(it));
+      console.log('滑鼠目標：', it.name, '｜戰力', ACC.itemPower(it));
       console.log('已裝備：', old ? (old.name + '｜戰力 ' + ACC.itemPower(old)) : '（無）');
       return { item: it, target: old, diff: ACC.itemPower(it) - (old ? ACC.itemPower(old) : 0) };
+    },
+    currencies: function () {
+      var D = currencyDB(), w = wallet(), out = [];
+      Object.keys(D).forEach(function (id) {
+        out.push({ id: id, name: D[id].name, count: num(w[id], 0), tierLabel: D[id].tierLabel || '' });
+      });
+      console.log('%c=== 通貨倉庫 ===', 'color:#fbbf24;font-weight:bold');
+      console.table(out);
+      return out;
     },
 
     sectName: function (v) {
@@ -1890,33 +2134,22 @@ window.HY = window.HY || {};
     },
     sectTable: function () {
       var DB = sectDB(), out = [];
-      Object.keys(DB).forEach(function (k) {
-        out.push({ id: k, name: (DB[k] && DB[k].name) || '（無 name）' });
-      });
-      console.log('%c=== 門派對照表（HY.Data.SECTS）===', 'color:#34d399;font-weight:bold');
+      Object.keys(DB).forEach(function (k) { out.push({ id: k, name: (DB[k] && DB[k].name) || '（無 name）' }); });
+      console.log('%c=== 門派對照表 ===', 'color:#34d399;font-weight:bold');
       console.table(out);
-      console.log('角色目前 sect 值：', rosterList().map(function (m) {
-        return { name: m.name, sect原始值: m.sect, 顯示: sectNameOf(m) };
-      }));
       return out;
     },
-
     chars: function () {
       return rosterList().map(function (m) {
         var eq = ACC.equipped(m), cnt = 0;
         Object.keys(eq).forEach(function (k) { if (eq[k]) cnt += 1; });
-        return {
-          id: charId(m), name: m.name, lv: num(m.lv, 1),
-          sectRaw: m.sect, sect: sectNameOf(m),
-          equipCount: cnt, equipPower: charEquipPower(m), active: isActive(m)
-        };
+        return { id: charId(m), name: m.name, lv: num(m.lv, 1), sectRaw: m.sect, sect: sectNameOf(m),
+          equipCount: cnt, equipPower: charEquipPower(m), active: isActive(m) };
       });
     },
     switchTo: function (idOrName) {
       var t = null;
-      rosterList().forEach(function (m) {
-        if (charId(m) === String(idOrName) || m.name === String(idOrName)) t = m;
-      });
+      rosterList().forEach(function (m) { if (charId(m) === String(idOrName) || m.name === String(idOrName)) t = m; });
       if (!t) { toast('找不到角色：' + idOrName, 'err'); return false; }
       if (switchCharacter(t)) { toast('已切換：' + (t.name || '')); afterSwitch(); return true; }
       toast('切換失敗', 'err');
@@ -1930,29 +2163,26 @@ window.HY = window.HY || {};
     status: function () {
       var es = safe(function () { return APP().equipSys; }, null);
       return {
-        version: '7.0',
+        version: '8.0',
         ready: window.HY.BagOverhaul.ready,
         intercept: _entryLog.intercept,
         tabBtnFound: !!document.querySelector(CFG.TAB_SEL),
         modalOpen: _open,
-        modalBuilt: !!_els,
+        page: _page,
         floatBtn: !!(_floatBtn && _floatBtn.parentNode),
-        moved: { craft: _entryLog.craftMoved, bag: _entryLog.bagMoved },
-        origNodes: {
-          craftInDoc: inDoc(_orig.craft),
-          bagListInDoc: inDoc(_orig.bagList),
-          bagFilterInDoc: inDoc(_orig.bagFilter)
-        },
+        origNodes: { craftInDoc: inDoc(_orig.craft), bagListInDoc: inDoc(_orig.bagList), bagFilterInDoc: inDoc(_orig.bagFilter) },
         bag: ACC.bag().length, maxBag: ACC.maxBag(),
         chars: rosterList().length,
         activeChar: (activeChar() && activeChar().name) || null,
         activeSect: sectNameOf(activeChar()),
-        sectDB: Object.keys(sectDB()).length,
+        currencyKinds: Object.keys(currencyDB()).length,
+        craftTarget: (craftTargetItem() && craftTargetItem().name) || null,
         compare: CFG.COMPARE,
         myLevel: ACC.myLevel(),
         hasEquip: !!(es && typeof es.equipInstance === 'function'),
         hasSell: !!(es && typeof es.sellEquipInstance === 'function'),
-        hasSellAll: !!(es && typeof es.sellAllBagEquips === 'function'),
+        hasApplyCurrency: !!(safe(function () { return APP().poeSys; }, null) &&
+          typeof safe(function () { return APP().poeSys.applyCurrencyToSelected; }, null) === 'function'),
         checked: Object.keys(_checked).length,
         lockCount: Object.keys(_locked).length
       };
@@ -1960,7 +2190,7 @@ window.HY = window.HY || {};
     diag: function () {
       var out = window.HY.BagOverhaul.status();
       out.orig = window.HY.BagOverhaul.orig();
-      console.log('%c=== BagOverhaul v7 診斷 ===', 'color:#34d399;font-weight:bold');
+      console.log('%c=== BagOverhaul v8 診斷 ===', 'color:#34d399;font-weight:bold');
       console.log('狀態：', out);
       return out;
     },
@@ -1970,15 +2200,13 @@ window.HY = window.HY || {};
         bag: b.length,
         rarityValues: (function () { var m = {}; b.forEach(function (it) { var r = String(it.rarity || '?'); m[r] = num(m[r], 0) + 1; }); return m; })(),
         chars: window.HY.BagOverhaul.chars(),
-        sectDBKeys: Object.keys(sectDB()),
+        currencies: Object.keys(currencyDB()),
+        wallet: JSON.parse(JSON.stringify(wallet())),
         compareEnabled: CFG.COMPARE
       };
       console.log('%c=== BagOverhaul 探測 ===', 'color:#34d399;font-weight:bold');
       console.table(out);
-      if (b.length) {
-        console.log('樣本裝備：', b[0]);
-        console.log('其對比對象：', compareTarget(b[0]));
-      }
+      if (b.length) console.log('樣本裝備：', b[0], '｜對比對象：', compareTarget(b[0]));
       return out;
     },
     config: function (o) { if (o) Object.keys(o).forEach(function (k) { CFG[k] = o[k]; }); return CFG; },
@@ -1998,12 +2226,13 @@ window.HY = window.HY || {};
     if (window.HY.BagOverhaul.ready) return true;
     if (!document.body) return false;
     injectCSS();
+    ensureHold();
     installIntercept();
     installFloat();
     window.HY.BagOverhaul.ready = true;
-    console.log('[BagOverhaul] ✓ v7 已載入｜行囊 ' + ACC.bag().length + ' 件｜角色 ' +
+    console.log('[BagOverhaul] ✓ v8 已載入｜行囊 ' + ACC.bag().length + ' 件｜角色 ' +
       rosterList().length + ' 位｜當前：' + ((activeChar() && activeChar().name) || '—') +
-      '（' + sectNameOf(activeChar()) + '）｜對比=' + CFG.COMPARE);
+      '（' + sectNameOf(activeChar()) + '）｜通貨 ' + Object.keys(currencyDB()).length + ' 種');
     return true;
   }
 
