@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>黃易群俠傳 Web：時空浪人 (Lv.300 破碎虛空版)</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="hy-boot-overlay" style="position:fixed;inset:0;background:#0f141c;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Microsoft JhengHei','PingFang TC',sans-serif;">
+        <div style="font-size:1.3rem;color:#c89d54;font-weight:bold;margin-bottom:16px;">⚡ 黃易群俠傳 Web</div>
+        <div style="width:340px;height:10px;background:#121822;border:1px solid #2e3b4e;border-radius:6px;overflow:hidden;">
+            <div id="hy-boot-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#0284c7,#00e5ff);transition:width 0.12s linear;"></div>
+        </div>
+        <div id="hy-boot-text" style="margin-top:12px;font-size:0.82rem;color:#94a3b8;">正在初始化時空引擎…</div>
+    </div>
+
+    <div id="game-container">
+        <!-- 頂部：時空與系統列（重啟鈕已移至最左以防誤點） -->
+        <header id="top-bar">
+            <!-- ⭐ 重啟時空：獨立置於最左，與其他按鈕保持距離 -->
+            <div style="flex:0 0 auto;">
+                <button id="btn-reset" class="sys-btn danger" title="⚠️ 清除所有存檔並重新開始">🔄 重啟時空</button>
+            </div>
+
+            <div class="title-box" style="flex:1 1 auto;">
+                <h1>⚡ 黃易群俠傳 <span class="subtitle">Lv.300 破碎虛空傳奇</span></h1>
+                <span id="current-map-badge">當前時空：星際實驗室</span>
+                <span id="party-size-badge" style="margin-left:8px; background:rgba(16,185,129,0.18); border:1px solid #10b981; color:#10b981; padding:4px 10px; border-radius:4px; font-size:0.85rem;">🚩 上陣人數：1人</span>
+            </div>
+
+            <div class="system-controls" style="flex:0 0 auto;">
+                <button id="btn-save" class="sys-btn">💾 儲存進度</button>
+                <!-- ⭐ 作弊面板按鈕由 cheatPanel.js 動態注入至此容器尾端 -->
+            </div>
+        </header>
+
+        <main id="main-content">
+            <!-- 左側 -->
+            <aside id="character-panel" class="panel">
+                <h2>👥 角色欄切換 (上限 Lv.300)</h2>
+                <div id="sidebar-roster-switcher" style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;"></div>
+
+                <div class="stat-group" style="background:#121822; padding:8px 10px; border-radius:6px; border:1px solid #2e3b4e;">
+                    <div class="stat-row"><span>當前操控：</span><strong id="char-name" class="sci-color">時空浪人</strong></div>
+                    <div class="stat-row"><span>門派陣營：</span><strong id="char-sect" class="highlight">無門無派</strong></div>
+                    <div class="stat-row"><span>境界等級：</span><span><strong id="char-lv" style="color:#fbbf24;">1</strong> <small style="color:#64748b;">/ 300</small></span></div>
+                    <div class="stat-row"><span>綜合戰力：</span><strong id="char-power" style="color:#f43f5e;">100</strong></div>
+                    <div class="stat-row" style="margin-bottom:0;"><span>歷練經驗：</span><span id="char-exp" style="font-size:0.8rem;">0 / 100</span></div>
+                </div>
+
+                <div class="bar-container">
+                    <div class="bar-label"><span>❤️ 氣血 (HP)</span><span id="hp-text">200/200</span></div>
+                    <div class="progress-bg"><div id="hp-bar" class="progress-fill hp"></div></div>
+
+                    <div class="bar-label"><span>💧 內力 (MP)</span><span id="mp-text">100/100</span></div>
+                    <div class="progress-bg"><div id="mp-bar" class="progress-fill mp"></div></div>
+                </div>
+
+                <h3>🧬 先天四維根骨 (點擊加點)</h3>
+                <div class="stat-grid" style="font-size:0.83rem;">
+                    <div title="提升氣血、防禦、暴擊抵抗">體魄(血/防/抗)：<strong id="stat-con" class="highlight">10</strong></div>
+                    <div title="提升外功攻擊力">力道(外功攻擊)：<strong id="stat-str" class="highlight">10</strong></div>
+                    <div title="提升閃避、命中、會心爆擊">身法(閃/命/爆)：<strong id="stat-agi" class="highlight">10</strong></div>
+                    <div title="提升內力、內勁、命中、暴擊抵抗">內息(內/命/抗)：<strong id="stat-int" class="highlight">10</strong></div>
+                </div>
+
+                <div id="free-points-box" class="upgrade-box">
+                    <span>剩餘潛能點：<strong id="char-points" class="gold-color">0</strong></span>
+                    <div class="point-btns">
+                        <button data-stat="con">+體魄</button>
+                        <button data-stat="str">+力道</button>
+                        <button data-stat="agi">+身法</button>
+                        <button data-stat="int">+內息</button>
+                    </div>
+                </div>
+
+                <h3>⚔️ 詳細戰鬥與抗性面板</h3>
+                <div class="stat-grid" style="font-size:0.84rem; gap:7px;">
+                    <div>🗡️ 綜合攻擊：<strong id="stat-atk" style="color:#f87171;">25</strong></div>
+                    <div>🛡️ 護體防禦：<strong id="stat-def" style="color:#60a5fa;">10</strong></div>
+                    <div>🎯 精準命中：<strong id="stat-hit" style="color:#38bdf8;">90%</strong></div>
+                    <div>🍃 輕功閃避：<strong id="stat-eva" style="color:#34d399;">7%</strong></div>
+                    <div>💥 會心爆擊：<strong id="stat-crit" style="color:#fbbf24;">8%</strong></div>
+                    <div>🔰 暴擊抵抗：<strong id="stat-critres" style="color:#a78bfa;">4%</strong></div>
+                    <div>🔥 會心傷倍：<span id="stat-critdmg">165%</span></div>
+                    <div>☯️ 心法減傷：<span id="stat-dmgred">0%</span></div>
+                </div>
+
+                <h3>💎 共享資源與當前配置</h3>
+                <div class="resource-box">
+                    <div>📖 武學點數 (武點)：<strong id="char-sp" class="sp-color">50</strong></div>
+                    <div>🪙 大唐紋銀 (兩)：<strong id="char-gold" class="gold-color">150</strong></div>
+                </div>
+                <div class="equip-box" style="margin-top:6px;">
+                    <div>🔥 主運心法：<strong id="active-xinfa-name" class="highlight">未運功</strong></div>
+                    <div>🍃 常駐身法：<strong id="active-qinggong-name" style="color:#10b981;">未常駐</strong></div>
+                    <div>🤝 隨行群俠：<strong id="active-companion-name" class="sci-color">無</strong></div>
+                    <div>🐉 隨行靈獸：<strong id="active-pet-name" style="color:#10b981;">無</strong></div>
+                    <hr style="border:none; border-top:1px dashed #2e3b4e; margin:5px 0;">
+                    <div id="sidebar-equip-summary" style="font-size:0.8rem;"></div>
+                </div>
+            </aside>
+
+            <!-- 中間 -->
+            <section id="center-stage" class="panel">
+                <nav id="tab-nav" style="flex-wrap:wrap;">
+                    <button class="tab-btn active" data-tab="tab-explore">🌀 時空探索(Lv.300)</button>
+                    <button class="tab-btn" data-tab="tab-party">👥 角色 & 組隊(5人)</button>
+                    <button class="tab-btn" data-tab="tab-martial">☯️ 武學心法</button>
+                    <button class="tab-btn" data-tab="tab-sect">⛩️ 十五大門派</button>
+                    <button class="tab-btn" data-tab="tab-inventory">🛡️ 裝備行囊 & 工藝</button>
+                    <!-- ⭐ 已移除 (丹藥) 字樣 -->
+                    <button class="tab-btn" data-tab="tab-blackmarket">🏪 時空黑市</button>
+                    <button class="tab-btn" data-tab="tab-companion">🤝 群俠助戰</button>
+                    <button class="tab-btn" data-tab="tab-pet">🐉 靈獸坐騎</button>
+                </nav>
+
+                <div id="tab-explore" class="tab-content active">
+                    <div id="map-selector-box">
+                        <h3>🛸 馬博士七大紀元時空導航儀 (Lv.1 ~ Lv.300，擊敗怪物可掉落神兵防具與 PoE 通貨！)</h3>
+                        <div id="map-list" class="button-grid"></div>
+                    </div>
+
+                    <div id="combat-zone">
+                        <div class="combat-header-row">
+                            <div>
+                                <h3 id="zone-title">📍 揚州城郊外</h3>
+                                <p id="zone-desc">大唐雙龍傳的起點，寇仲與徐子陵曾在此混跡。</p>
+                            </div>
+                            <div class="auto-control-bar">
+                                <button id="btn-toggle-auto" class="action-btn auto-btn">🤖 開啟自動戰鬥</button>
+                                <label class="repeat-label">
+                                    <input type="checkbox" id="chk-auto-repeat"> 🔄 戰勝自動連刷
+                                </label>
+                            </div>
+                        </div>
+
+                        <details id="auto-tactics-box" style="background:#121822; border:1px solid #00e5ff; border-radius:6px; padding:10px 14px; margin-bottom:14px;">
+                            <summary style="cursor:pointer; color:#00e5ff; font-weight:bold; font-size:0.9rem;">
+                                ⚙️ 時空內掛：自動戰鬥戰術細節設定（點擊展開設定用藥門檻、隊員輔助、智慧選招）
+                            </summary>
+
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px; font-size:0.84rem;">
+                                <div style="background:#18202c; padding:10px; border-radius:4px; border:1px solid #2e3b4e;">
+                                    <h4 style="color:#10b981; margin-bottom:8px;">💊 自動用藥條件設定</h4>
+
+                                    <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:4px;">👤 自身用藥（優先）</div>
+                                    <div style="margin-bottom:6px;">
+                                        氣血低於
+                                        <input type="number" id="cfg-hp-pct" value="50" min="10" max="95" step="5" style="width:55px; background:#0f141c; color:#fff; border:1px solid #475569; padding:3px;"> % 服用：
+                                        <select id="cfg-hp-item" style="background:#0f141c; color:#fbbf24; border:1px solid #475569; padding:3px;">
+                                            <option value="pill_hp">行軍散 (+350氣血/+120內力)</option>
+                                            <option value="pill_major">九轉大還丹 (+4000氣血/+1200內力)</option>
+                                            <option value="pill_supreme">慈航千年雪蓮丹 (+35000氣血)</option>
+                                            <option value="none">不自動服補血藥</option>
+                                        </select>
+                                    </div>
+                                    <div style="margin-bottom:10px;">
+                                        內力低於
+                                        <input type="number" id="cfg-mp-pct" value="25" min="5" max="90" step="5" style="width:55px; background:#0f141c; color:#fff; border:1px solid #475569; padding:3px;"> % 服用：
+                                        <select id="cfg-mp-item" style="background:#0f141c; color:#60a5fa; border:1px solid #475569; padding:3px;">
+                                            <option value="pill_hp">行軍散 (+350氣血/+120內力)</option>
+                                            <option value="pill_major">九轉大還丹 (+4000氣血/+1200內力)</option>
+                                            <option value="pill_supreme">慈航千年雪蓮丹 (+10000內力)</option>
+                                            <option value="none">不自動服回內藥</option>
+                                        </select>
+                                    </div>
+
+                                    <div style="border-top:1px dashed #334155; padding-top:8px;">
+                                        <label style="font-size:0.78rem; color:#94a3b8; display:flex; align-items:center; gap:5px; margin-bottom:6px; cursor:pointer;">
+                                            <input type="checkbox" id="cfg-ally-use-pills" checked>
+                                            🤝 幫隊友自動用藥
+                                        </label>
+                                        <div style="margin-bottom:6px;">
+                                            隊友氣血低於
+                                            <input type="number" id="cfg-ally-hp-pct" value="40" min="10" max="95" step="5" style="width:55px; background:#0f141c; color:#fff; border:1px solid #475569; padding:3px;"> % 服用：
+                                            <select id="cfg-ally-hp-item" style="background:#0f141c; color:#4ade80; border:1px solid #475569; padding:3px;"></select>
+                                        </div>
+                                        <div>
+                                            隊友內力低於
+                                            <input type="number" id="cfg-ally-mp-pct" value="20" min="5" max="90" step="5" style="width:55px; background:#0f141c; color:#fff; border:1px solid #475569; padding:3px;"> % 服用：
+                                            <select id="cfg-ally-mp-item" style="background:#0f141c; color:#38bdf8; border:1px solid #475569; padding:3px;"></select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style="background:#18202c; padding:10px; border-radius:4px; border:1px solid #2e3b4e;">
+                                    <h4 style="color:#c89d54; margin-bottom:8px;">☯️ 智慧情境出招設定</h4>
+
+                                    <div style="margin-bottom:6px;">
+                                        <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:4px;">👤 自身出招</div>
+                                        1. 【危急自保】自身氣血低於
+                                        <input type="number" id="cfg-emerg-pct" value="45" min="10" max="90" step="5" style="width:52px; background:#0f141c; color:#fff; border:1px solid #475569; padding:2px;"> % 施放：
+                                        <select id="cfg-emerg-skill" style="background:#0f141c; color:#38bdf8; border:1px solid #475569; padding:3px;"></select>
+                                    </div>
+                                    <div style="margin-bottom:6px;">
+                                        2. 【多敵圍攻】敵人 ≥ 2 名時施放群攻技：
+                                        <select id="cfg-aoe-skill" style="background:#0f141c; color:#a78bfa; border:1px solid #475569; padding:3px;"></select>
+                                    </div>
+                                    <div style="margin-bottom:10px;">
+                                        3. 【平時主力】一般狀態下優先施放：
+                                        <select id="cfg-primary-skill" style="background:#0f141c; color:#fbbf24; border:1px solid #475569; padding:3px;"></select>
+                                    </div>
+
+                                    <div style="border-top:1px dashed #334155; padding-top:8px;">
+                                        <label style="font-size:0.78rem; color:#94a3b8; display:flex; align-items:center; gap:5px; margin-bottom:6px; cursor:pointer;">
+                                            <input type="checkbox" id="cfg-ally-support" checked>
+                                            🤝 開啟隊員技能輔助（補血/狀態）
+                                        </label>
+                                        <div style="margin-bottom:6px;">
+                                            4. 【隊友補血】隊友氣血低於
+                                            <input type="number" id="cfg-ally-heal-pct" value="50" min="10" max="95" step="5" style="width:52px; background:#0f141c; color:#fff; border:1px solid #475569; padding:2px;"> % 施放：
+                                            <select id="cfg-ally-skill" style="background:#0f141c; color:#4ade80; border:1px solid #475569; padding:3px;"></select>
+                                        </div>
+                                        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                                            <span>目標優先：
+                                                <select id="cfg-ally-target" style="background:#0f141c; color:#f472b6; border:1px solid #475569; padding:3px;">
+                                                    <option value="most_wounded">最殘血隊友</option>
+                                                    <option value="leader">主控角色</option>
+                                                    <option value="random">隨機隊友</option>
+                                                </select>
+                                            </span>
+                                            <span>檢查間隔：
+                                                <input type="number" id="cfg-ally-interval" value="1" min="1" max="10" step="1" style="width:42px; background:#0f141c; color:#fff; border:1px solid #475569; padding:3px;"> 次
+                                            </span>
+                                        </div>
+                                        <p style="font-size:0.72rem; color:#64748b; margin-top:6px;">
+                                            💡 觸發時：招式的治療效果將轉向該隊友。
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+
+                        <div id="enemy-list" class="enemy-grid"></div>
+
+                        <div id="battle-arena" class="hidden">
+                            <div class="fighter-cards" style="align-items:stretch;">
+                                <div class="fighter-card player-side" style="text-align:left;">
+                                    <h4 id="battle-party-group-title" style="color:#00e5ff; margin-bottom:6px;">🚩 我方陣營</h4>
+                                    <div id="battle-party-list" style="display:flex; flex-direction:column; gap:5px; font-size:0.84rem;"></div>
+                                    <hr style="border:none; border-top:1px dashed #334155; margin:8px 0;">
+                                    <div class="companion-assist-tag" id="battle-xinfa-tag">🔥 主控心法：無</div>
+                                    <div class="companion-assist-tag" id="battle-companion-tag">🤝 護法：無</div>
+                                    <div class="companion-assist-tag" id="battle-pet-tag" style="color:#10b981;">🐉 靈獸：無</div>
+                                </div>
+                                <div class="vs-badge" style="display:flex; align-items:center;">VS</div>
+                                <div class="fighter-card enemy-side" style="text-align:left;">
+                                    <h4 id="battle-enemy-group-title" style="color:#ef4444; margin-bottom:6px;">⚔️ 敵方陣營</h4>
+                                    <div id="battle-enemy-list-ui" style="display:flex; flex-direction:column; gap:5px; font-size:0.84rem;"></div>
+                                </div>
+                            </div>
+
+                            <div class="battle-actions">
+                                <div id="skill-buttons-container"></div>
+                                <div class="utility-actions">
+                                    <button id="btn-heal-pill" class="action-btn heal">💊 服用行軍散</button>
+                                    <button id="btn-flee" class="action-btn flee">🏃 啟動時空逃逸</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="tab-party" class="tab-content">
+                    <div class="combat-header-row">
+                        <div>
+                            <h3>👥 時空行者角色欄（最高可創建 5 名獨立角色，上限 Lv.300）</h3>
+                            <p style="font-size:0.83rem; color:#94a3b8;">點擊「切換操控」即可為該角色獨立拜入不同門派、修煉 10 式外功、5 階心法與 3 階身法，激發專屬門派特色！</p>
+                        </div>
+                        <div class="btn-group-row">
+                            <input type="text" id="inp-new-char-name" placeholder="輸入新角色名 (選填)" style="background:#121822; border:1px solid #334155; color:#fff; padding:6px 10px; border-radius:4px;">
+                            <button id="btn-create-char" class="btn-primary">➕ 創建新角色 (最高5人)</button>
+                            <button id="btn-deploy-all" class="action-btn" style="border-color:#10b981; color:#10b981;">🚩 全員一鍵上陣</button>
+                        </div>
+                    </div>
+
+                    <div id="roster-party-list" class="enemy-grid" style="margin-bottom:18px;"></div>
+
+                    <h3>☯️ 組隊合擊陣法選擇</h3>
+                    <div id="formation-list" class="enemy-grid"></div>
+                </div>
+
+                <div id="tab-martial" class="tab-content">
+                    <div class="sub-tab-bar" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+                        <button class="action-btn sub-martial-btn active" data-sub="sub-skills">🗡️ 外功武技 (15門派×10式)</button>
+                        <button class="action-btn sub-martial-btn" data-sub="sub-xinfa">🔥 內功心法 (15門派×5階)</button>
+                        <button class="action-btn sub-martial-btn" data-sub="sub-qinggong">🍃 輕功身法 (共通4+門派45｜常駐1)</button>
+                        <button class="action-btn sub-martial-btn" data-sub="sub-mastery" style="border-color:#38bdf8; color:#38bdf8;">🎯 武道專精 (18門)</button>
+                        <button class="action-btn sub-martial-btn" data-sub="sub-meridian">🧘 奇經十四脈 (14脈)</button>
+                    </div>
+
+                    <div id="sub-skills" class="sub-martial-panel">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                            <h3 style="margin:0;">🗡️ 外功武學招式（每門派 10 式，Lv.10/40/70/100/130/160/190/220/250/280 各解鎖一式）</h3>
+                            <div id="skills-sect-filter-slot" style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;">
+                                <button class="action-btn m-cat-btn active" data-mcat="all" style="padding:4px 10px; font-size:0.8rem;">全部顯示</button>
+                                <button class="action-btn m-cat-btn" data-mcat="common" style="padding:4px 10px; font-size:0.8rem;">江湖共通</button>
+                                <button class="action-btn m-cat-btn" data-mcat="my_sect" style="padding:4px 10px; font-size:0.8rem;">本門絕學</button>
+                            </div>
+                        </div>
+                        <div id="martial-list" class="enemy-grid"></div>
+                    </div>
+
+                    <div id="sub-xinfa" class="sub-martial-panel hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                            <h3 style="margin:0;">🔥 內功心法（每門派 5 階，Lv.20/70/130/200/280 各解鎖一階；主運心法強化門派特色）</h3>
+                            <div id="xinfa-sect-filter-slot" style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;"></div>
+                        </div>
+                        <div id="xinfa-list" class="enemy-grid"></div>
+                    </div>
+
+                    <div id="sub-qinggong" class="sub-martial-panel hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                            <h3 style="margin:0;">🍃 輕功身法（江湖共通 4 門 + 每門派專屬 3 階，Lv.30/120/240；每人僅能常駐 1 門，常駐者強化門派特色）</h3>
+                            <div id="qinggong-sect-filter-slot" style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;"></div>
+                        </div>
+                        <div id="qinggong-list" class="enemy-grid"></div>
+                    </div>
+
+                    <div id="sub-mastery" class="sub-martial-panel hidden">
+                        <h3>🎯 武道專精（18 門：命中／閃避／暴抗 3 門 + 15 門魔獸世界風格專精）</h3>
+                        <div id="mastery-list" class="enemy-grid"></div>
+                    </div>
+
+                    <div id="sub-meridian" class="sub-martial-panel hidden">
+                        <h3>🧘 奇經十四脈周天運轉（打通十四脈穴道，強化命中、暴抗、攻防與真氣）</h3>
+                        <div id="meridian-list" class="enemy-grid"></div>
+                    </div>
+                </div>
+
+                <div id="tab-sect" class="tab-content">
+                    <h3>⛩️ 黃易武學十五大宗派（各派擁有獨一無二的「專屬門派特色」，並以 10 式外功、5 階心法、3 階身法對應強化！）</h3>
+                    <div id="sect-list" class="card-list"></div>
+                </div>
+
+                <div id="tab-inventory" class="tab-content">
+                    <h3>🛡️ 當前操控角色的十大裝備槽位（點擊「🎯 選為工藝目標」可在下方用打怪掉落的 PoE 通貨洗煉前後綴！）</h3>
+                    <div id="paperdoll-grid" class="enemy-grid" style="margin-bottom:16px;"></div>
+
+                    <div id="poe-craft-bench" style="background:#111722; border:1px solid #f59e0b; border-radius:8px; padding:14px; margin-bottom:18px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                            <h3 style="margin:0; color:#fbbf24;">💎 流亡黯道 PoE 通貨工藝打造台（通貨由戰鬥依稀有度掉落）</h3>
+                            <span id="craft-target-label" style="color:#00e5ff; font-weight:bold;">當前打造部位：🗡️ 神兵武器</span>
+                        </div>
+                        <div id="craft-item-preview" style="background:#18202c; border:1px solid #334155; padding:12px; border-radius:6px; margin-bottom:12px;"></div>
+                        <div id="currency-orb-bar" class="enemy-grid" style="grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); margin-bottom:0;"></div>
+                    </div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                        <h3 style="margin:0;">🎒 全隊共享次元道具欄（支援批量典當 x1 / x10 / 全賣）</h3>
+                        <div class="inv-filter-bar" style="display:flex; gap:6px; flex-wrap:wrap;">
+                            <button id="btn-sell-all-equip" class="action-btn" style="border-color:#f43f5e; color:#f87171;">🧹 一鍵典當所有未穿戴裝備</button>
+                            <button class="action-btn inv-filter-btn active" data-filter="all">全部物品</button>
+                            <button class="action-btn inv-filter-btn" data-filter="consumable">丹藥奇物</button>
+                            <button class="action-btn inv-filter-btn" data-filter="equip">神兵防具</button>
+                        </div>
+                    </div>
+                    <div id="inventory-list" class="enemy-grid"></div>
+                </div>
+
+                <!-- 時空黑市（已移除「(丹藥)」；賭坊區塊由 gambleSystem.js 注入於 #shop-list 之後） -->
+                <div id="tab-blackmarket" class="tab-content">
+                    <div class="combat-header-row">
+                        <div>
+                            <h3>⚡ 黑市神秘商人・限時特價丹藥（6折 ~ 8折搶購）</h3>
+                            <p style="font-size:0.82rem; color:#94a3b8;">黑市僅販售行軍散、九轉大還丹、雪蓮丹等靈藥（神兵裝備與通貨皆由擊敗怪物掉落）。</p>
+                        </div>
+                        <div class="btn-group-row">
+                            <button id="btn-mystery-box" class="btn-primary" style="background:#7c3aed;">🎲 抽取烏氏靈藥奇珍匣 (350兩)</button>
+                            <button id="btn-refresh-market" class="action-btn">🔄 刷新限時丹藥 (50兩)</button>
+                        </div>
+                    </div>
+                    <div id="market-special-list" class="enemy-grid" style="margin-bottom:18px;"></div>
+
+                    <h3 style="margin-bottom:10px;">🏪 時空黑市常駐丹藥鋪（支援 x1 / x10 / x100 批量採購）</h3>
+                    <div id="shop-list" class="enemy-grid"></div>
+                    <!-- ⭐ 賭坊區塊（#gamble-section）由 gambleSystem.js 動態注入至此處之後 -->
+                </div>
+
+                <div id="tab-companion" class="tab-content">
+                    <h3>🤝 黃易群俠錄（Lv.3 寇仲 ~ Lv.275 令東來，隨行出戰提供全隊攻防、命中與暴抗光環）</h3>
+                    <div id="companion-list" class="card-list"></div>
+                </div>
+
+                <div id="tab-pet" class="tab-content">
+                    <h3>🐉 靈獸與生化坐騎系統（Lv.2 機械獵犬 ~ Lv.270 量子吞星獸，提供全隊騎乘加成與每回合撲擊）</h3>
+                    <div id="pet-list" class="enemy-grid"></div>
+                </div>
+            </section>
+
+            <!-- 右側 -->
+            <aside id="log-panel" class="panel">
+                <div style="flex:1.2; display:flex; flex-direction:column; min-height:0; background:#121822; border:1px solid #ef4444; border-radius:6px; padding:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #2e3b4e; padding-bottom:4px; margin-bottom:6px;">
+                        <h3 style="margin:0; color:#f87171; font-size:0.9rem;">⚔️ 戰鬥內容面板</h3>
+                        <button id="btn-clear-combat-log" class="action-btn" style="padding:2px 8px; font-size:0.72rem;">清空</button>
+                    </div>
+                    <div id="game-log" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; font-size:0.8rem;"></div>
+                </div>
+
+                <div style="flex:0.9; display:flex; flex-direction:column; min-height:0; background:#121822; border:1px solid #10b981; border-radius:6px; padding:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #2e3b4e; padding-bottom:4px; margin-bottom:6px;">
+                        <h3 style="margin:0; color:#10b981; font-size:0.9rem;">🎁 物品掉落面板</h3>
+                        <button id="btn-clear-loot-log" class="action-btn" style="padding:2px 8px; font-size:0.72rem;">清空</button>
+                    </div>
+                    <div id="loot-log" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; font-size:0.8rem;"></div>
+                </div>
+
+                <div style="flex:0.9; display:flex; flex-direction:column; min-height:0; background:#121822; border:1px solid #fbbf24; border-radius:6px; padding:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #2e3b4e; padding-bottom:4px; margin-bottom:6px;">
+                        <h3 style="margin:0; color:#fbbf24; font-size:0.9rem;">💰 武點銀兩面板</h3>
+                        <button id="btn-clear-wealth-log" class="action-btn" style="padding:2px 8px; font-size:0.72rem;">清空</button>
+                    </div>
+                    <div id="wealth-log" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; font-size:0.8rem;"></div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script src="./js/loadOrder.js?v=63"></script>
+    <script src="./js/bootLoader.js?v=63"></script>
+</body>
+</html>
